@@ -1,5 +1,16 @@
 from ai_studio.connect import ConnectResult, can_connect, output_type, validate_graph, validate_params
+from ai_studio.frames import ScoreFrame, ScoreRow, SelectionFrame, TargetPortfolio, WeightFrame
 from ai_studio.functions import FUNCTIONS, get_function
+from ai_studio.portfolio import (
+    apply_cash_weight,
+    cap_max_weight,
+    compare_threshold,
+    select_min_score,
+    select_top_n,
+    to_target_portfolio,
+    weight_by_score,
+    weight_equal,
+)
 from ai_studio.schema import (
     PORT_TYPE_LABEL,
     RUN_CONTEXT,
@@ -27,8 +38,21 @@ __all__ = [
     "StrategyEdge",
     "StrategyGraph",
     "StrategyNode",
+    "ScoreFrame",
+    "ScoreRow",
+    "SelectionFrame",
+    "TargetPortfolio",
+    "WeightFrame",
     "accepted_types",
+    "apply_cash_weight",
     "can_connect",
+    "cap_max_weight",
+    "compare_threshold",
+    "select_min_score",
+    "select_top_n",
+    "to_target_portfolio",
+    "weight_by_score",
+    "weight_equal",
     "get_function",
     "output_type",
     "validate_graph",

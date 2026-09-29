@@ -25,7 +25,7 @@
 
 ## 기존 코드와 변경 범위
 
-기존 14개 블록 ID, 포트 키, `get_function`, `can_connect`, `validate_graph`는 유지합니다. `momentum.factor`와 팩터 블록의 `score`는 중간 점수이며 최종 전략 결과가 아닙니다. 기존 `momentum.trend`의 `signal`은 상태 조건으로 정의하고, 새로운 `momentum.ma-cross`의 `event`를 교차 순간에 사용합니다. 기존 `allocation.target-weight`의 여러 허용 타입은 기존 화면 호환용으로 유지했으나, 신규 편집기에서는 점수→종목 선정, 조건→종목 선정의 변환 규칙을 명시한 뒤 비중 블록에 연결해야 합니다. `RUN_CONTEXT`의 리밸런싱 주기와 `allocation.rebalance`의 주기가 중복될 수 있으므로 UI에서는 정책 소유자를 하나로 정해야 합니다.
+기존 14개 블록 ID, 포트 키, `get_function`, `can_connect`, `validate_graph`는 유지합니다. `momentum.factor`와 팩터 블록의 `score`는 중간 점수이며 최종 전략 결과가 아닙니다. 기존 `momentum.trend`의 `signal`은 상태 조건으로 정의하고, 새로운 `momentum.ma-cross`의 `event`를 교차 순간에 사용합니다. 점수 블록은 종목을 고르거나 비중을 정하지 않습니다. `selection.top-n`이 점수 순으로 선정하고, `allocation.target-weight`는 그 선정 결과만 동일·점수 비례 비중으로 나눕니다. 종목 상한과 현금은 `portfolio.max-weight`, `portfolio.cash`가 따로 적용하고, `portfolio.target`이 주문 수량 없는 목표 포트폴리오를 만듭니다. RSI는 `indicator.rsi`의 지표 값이고, `condition.threshold`가 `RSI < 30` 같은 참·거짓만 만듭니다. `RUN_CONTEXT`의 리밸런싱 주기와 `allocation.rebalance`의 주기가 중복될 수 있으므로 UI에서는 정책 소유자를 하나로 정해야 합니다.
 
 블록에는 `version`, 입력·출력 스키마 버전, 역할, 실행유형, `RequiredData(fields, minimum_history, frequency)`가 추가됐습니다. 데이터 요구 기간은 설정 기간에 따라 늘어날 수 있으므로 실행 시 동적 검증이 필요합니다. `validate_graph`는 필수 포트·타입·중복·순환·파라미터 범위를 검사합니다.
 

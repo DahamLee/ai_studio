@@ -124,7 +124,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="모멘텀 팩터 점수",
         category="momentum",
         category_label="모멘텀 신호",
-        summary="과거 수익률이 높은 종목에 높은 점수를 준다.",
+        summary="과거 수익률만으로 점수를 준다. 종목 선정과 비중은 정하지 않는다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
@@ -155,15 +155,6 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 min=0,
                 max=12,
                 unit="개월",
-            ),
-            ParamSpec(
-                "topN",
-                "상위 종목 수",
-                "integer",
-                "점수가 높은 종목만 남긴다.",
-                default=20,
-                min=1,
-                unit="개",
             ),
         ),
     ),
@@ -257,23 +248,22 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="목표 비중 자산배분",
         category="allocation",
         category_label="비중·청산",
-        summary="선택된 종목을 동일 비중, 점수 비중, 또는 지정 비중으로 나눈다.",
+        summary="선정된 종목만 동일 비중 또는 점수 비례 비중으로 나눈다. 상한과 현금은 정하지 않는다.",
         inputs=(
             PortSpec(
                 "selection",
-                "선택 결과",
-                "score",
-                "비중을 나눌 종목. 종목 집합, 신호, 점수 중 하나를 받는다.",
+                "선정 종목",
+                "selection",
+                "랭킹 단계에서 고른 종목. 점수 비례일 때는 선정 결과에 점수가 있어야 한다.",
                 required=True,
-                accepts=("universe", "signal", "score"),
             ),
         ),
         outputs=(
             PortSpec(
                 "weight",
-                "목표 비중",
+                "배분 비중",
                 "weight",
-                "종목별 목표 비중. 합계는 1에서 현금 비중을 뺀 값이다.",
+                "제약 적용 전의 종목 비중. 주문 수량은 포함하지 않는다.",
                 required=True,
             ),
         ),
@@ -287,28 +277,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 options=_opts(
                     ("equal", "동일 비중"),
                     ("score", "점수 비례"),
-                    ("fixed", "종목당 고정 비중"),
                 ),
-            ),
-            ParamSpec(
-                "maxWeightPct",
-                "종목 상한",
-                "number",
-                "한 종목이 넘지 못하는 비중.",
-                default=10,
-                min=0,
-                max=100,
-                unit="%",
-            ),
-            ParamSpec(
-                "cashWeightPct",
-                "현금 비중",
-                "number",
-                "투자하지 않고 남겨 둘 현금 비율.",
-                default=0,
-                min=0,
-                max=100,
-                unit="%",
             ),
         ),
     ),
@@ -418,7 +387,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="가치(밸류) 팩터",
         category="factor",
         category_label="팩터 전략",
-        summary="저평가된 종목에 높은 점수를 준다.",
+        summary="저평가일수록 높은 점수를 준다. 상위 종목 선정은 하지 않는다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
@@ -443,15 +412,6 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                     ("composite", "PER·PBR·PSR 결합"),
                 ),
             ),
-            ParamSpec(
-                "topN",
-                "상위 종목 수",
-                "integer",
-                "가치 점수가 높은 종목만 남긴다.",
-                default=30,
-                min=1,
-                unit="개",
-            ),
         ),
     ),
     FunctionSpec(
@@ -459,7 +419,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="퀄리티 팩터",
         category="factor",
         category_label="팩터 전략",
-        summary="수익성과 재무 건전성이 좋은 종목에 높은 점수를 준다.",
+        summary="우량할수록 높은 점수를 준다. 상위 종목 선정은 하지 않는다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
@@ -484,15 +444,6 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                     ("composite", "ROE·ROA·부채비율 결합"),
                 ),
             ),
-            ParamSpec(
-                "topN",
-                "상위 종목 수",
-                "integer",
-                "퀄리티 점수가 높은 종목만 남긴다.",
-                default=30,
-                min=1,
-                unit="개",
-            ),
         ),
     ),
     FunctionSpec(
@@ -500,7 +451,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="저변동성 팩터",
         category="factor",
         category_label="팩터 전략",
-        summary="가격 변동이 작은 종목에 높은 점수를 준다.",
+        summary="변동이 작을수록 높은 점수를 준다. 하위 종목 선정은 하지 않는다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
@@ -528,15 +479,6 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 default=252,
                 min=20,
                 unit="일",
-            ),
-            ParamSpec(
-                "bottomN",
-                "저변동 종목 수",
-                "integer",
-                "변동이 작은 종목만 남긴다.",
-                default=30,
-                min=1,
-                unit="개",
             ),
         ),
     ),
@@ -693,7 +635,11 @@ def _legacy_role(fn: FunctionSpec) -> str:
     if fn.category == "universe":
         return "UNIVERSE"
     if fn.id in _SCORE_IDS:
-        return "INDICATOR"
+        return "SCORE"
+    if fn.id == "allocation.target-weight":
+        return "WEIGHTING"
+    if fn.id in {"allocation.stop", "allocation.rebalance"}:
+        return "CONSTRAINT"
     if fn.category == "logic":
         return "LOGIC"
     if fn.category == "allocation":
@@ -743,6 +689,126 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
             _EVENT_ENTRY, _EVENT_EXIT,
         ),
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="HYBRID",
+    ),
+    FunctionSpec(
+        id="indicator.rsi",
+        name="RSI",
+        category="indicator",
+        category_label="지표",
+        summary="종목별 RSI 값을 계산한다. 좋고 나쁨을 정하지 않는다.",
+        inputs=(_UNIVERSE_IN,),
+        outputs=(
+            PortSpec("value", "RSI", "indicator", "0에서 100 사이의 RSI. 선호 점수가 아니다.", True),
+        ),
+        params=(
+            ParamSpec("period", "기간", "integer", "RSI 계산에 쓰는 봉 수.", 14, min=2, unit="일"),
+        ),
+        role="INDICATOR",
+        required_data=RequiredData(("close",), 15, "1d"),
+    ),
+    FunctionSpec(
+        id="condition.threshold",
+        name="지표 임계 조건",
+        category="condition",
+        category_label="조건",
+        summary="지표 값이 임계값과 비교해 참인지 거짓인지만 정한다. 점수와 비중은 만들지 않는다.",
+        inputs=(
+            PortSpec("value", "지표 값", "indicator", "비교할 지표.", True),
+        ),
+        outputs=(
+            PortSpec("signal", "조건", "signal", "비교 결과를 만족하면 참.", True),
+        ),
+        params=(
+            ParamSpec(
+                "operator", "비교", "enum", "지표와 임계값을 비교하는 방법.", "lt",
+                options=_opts(("lt", "미만"), ("lte", "이하"), ("gt", "초과"), ("gte", "이상")),
+            ),
+            ParamSpec("threshold", "임계값", "number", "비교 기준값. RSI 30은 30이다.", 30),
+        ),
+        role="CONDITION",
+    ),
+    FunctionSpec(
+        id="selection.top-n",
+        name="상위 N 선정",
+        category="selection",
+        category_label="선정",
+        summary="점수가 높은 순서로 N개를 고른다. 점수를 다시 계산하지 않는다.",
+        inputs=(
+            PortSpec("score", "종목 점수", "score", "높을수록 우선하는 점수.", True),
+        ),
+        outputs=(
+            PortSpec("selection", "선정 종목", "selection", "순위와 점수가 보존된 선정 결과.", True),
+        ),
+        params=(
+            ParamSpec("topN", "상위 종목 수", "integer", "남길 종목 수.", 20, min=1, unit="개"),
+        ),
+        role="SELECTION",
+    ),
+    FunctionSpec(
+        id="selection.threshold",
+        name="점수 임계 선정",
+        category="selection",
+        category_label="선정",
+        summary="점수가 기준 이상인 종목만 남긴다. 비중은 정하지 않는다.",
+        inputs=(
+            PortSpec("score", "종목 점수", "score", "높을수록 우선하는 점수.", True),
+        ),
+        outputs=(
+            PortSpec("selection", "선정 종목", "selection", "기준을 통과한 종목.", True),
+        ),
+        params=(
+            ParamSpec("minScore", "최소 점수", "number", "이 값 이상인 종목만 선정한다.", 0),
+        ),
+        role="SELECTION",
+    ),
+    FunctionSpec(
+        id="portfolio.max-weight",
+        name="종목 비중 상한",
+        category="portfolio",
+        category_label="포트폴리오 제약",
+        summary="한 종목 비중을 상한까지만 남긴다. 남는 비중은 다시 나누지 않는다.",
+        inputs=(
+            PortSpec("weight", "배분 비중", "weight", "제약 전 비중.", True),
+        ),
+        outputs=(
+            PortSpec("weight", "제한된 비중", "weight", "상한이 적용된 비중. 주문 수량은 없다.", True),
+        ),
+        params=(
+            ParamSpec("maxWeightPct", "종목 상한", "number", "한 종목이 넘지 못하는 비중.", 10, min=0, max=100, unit="%"),
+        ),
+        role="CONSTRAINT",
+    ),
+    FunctionSpec(
+        id="portfolio.cash",
+        name="현금 비중",
+        category="portfolio",
+        category_label="포트폴리오 제약",
+        summary="투자 비중 합계가 1에서 현금 비중을 뺀 값이 되도록 축소한다.",
+        inputs=(
+            PortSpec("weight", "배분 비중", "weight", "축소할 비중.", True),
+        ),
+        outputs=(
+            PortSpec("weight", "현금 반영 비중", "weight", "현금 비중을 남긴 종목 비중.", True),
+        ),
+        params=(
+            ParamSpec("cashWeightPct", "현금 비중", "number", "투자하지 않고 남길 비율.", 0, min=0, max=100, unit="%"),
+        ),
+        role="CONSTRAINT",
+    ),
+    FunctionSpec(
+        id="portfolio.target",
+        name="목표 포트폴리오",
+        category="portfolio",
+        category_label="목표 포트폴리오",
+        summary="배분 비중을 목표 비중과 현금으로 확정한다. 주문 수량은 만들지 않는다.",
+        inputs=(
+            PortSpec("weight", "배분 비중", "weight", "제약이 끝난 종목 비중.", True),
+        ),
+        outputs=(
+            PortSpec("portfolio", "목표 포트폴리오", "target_portfolio", "종목별 목표 비중과 현금 비중.", True),
+        ),
+        params=(),
+        role="TARGET",
     ),
 )
 

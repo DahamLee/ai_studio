@@ -3,9 +3,15 @@
 from dataclasses import dataclass
 from typing import Literal
 
-PortType = Literal["universe", "signal", "event", "score", "weight", "strategy_result"]
+PortType = Literal[
+    "universe", "signal", "event", "indicator", "score", "selection",
+    "weight", "target_portfolio", "strategy_result",
+]
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
-FunctionCategory = Literal["universe", "momentum", "allocation", "factor", "logic", "strategy"]
+FunctionCategory = Literal[
+    "universe", "momentum", "allocation", "factor", "logic", "strategy",
+    "indicator", "condition", "selection", "portfolio",
+]
 ExecutionType = Literal[
     "STATE_REBALANCE", "EVENT_LIFECYCLE", "HYBRID", "MULTI_LEG_EVENT",
     "EXECUTION_ALGORITHM", "ANALYSIS_FUNCTION",
@@ -25,8 +31,11 @@ PORT_TYPE_LABEL: dict[str, str] = {
     "universe": "종목 집합",
     "signal": "상태 조건",
     "event": "발생 시점 이벤트",
+    "indicator": "지표 값",
     "score": "종목 점수",
-    "weight": "목표 비중",
+    "selection": "선정 종목",
+    "weight": "배분 비중",
+    "target_portfolio": "목표 포트폴리오",
     "strategy_result": "전략 판단 결과",
 }
 
@@ -87,7 +96,10 @@ class FunctionSpec:
     outputs: tuple[PortSpec, ...]
     params: tuple[ParamSpec, ...]
     version: str = "1.0.0"
-    role: Literal["UNIVERSE", "INDICATOR", "CONDITION", "EVENT", "LOGIC", "ALLOCATION", "STRATEGY"] = "CONDITION"
+    role: Literal[
+        "UNIVERSE", "INDICATOR", "CONDITION", "EVENT", "LOGIC", "SCORE",
+        "SELECTION", "WEIGHTING", "CONSTRAINT", "TARGET", "ALLOCATION", "STRATEGY",
+    ] = "CONDITION"
     strategy_execution_type: ExecutionType | None = None
     required_data: RequiredData = RequiredData()
     input_schema_version: str = "1.0.0"
