@@ -1,0 +1,5 @@
+[project]
+name = "ai-studio"
+version = "0.1.0"
+description = "우리투자증권 AI STUDIO 전략 함수 계약"
+requires-python = ">=3.11"
