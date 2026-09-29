@@ -1,4 +1,6 @@
-from ai_studio.schema import FunctionSpec, ParamOption, ParamSpec, PortSpec
+from dataclasses import replace
+
+from ai_studio.schema import FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData
 
 _UNIVERSE_OUT = PortSpec(
     "universe",
@@ -20,7 +22,7 @@ def _opts(*pairs: tuple[str, str]) -> tuple[ParamOption, ...]:
     return tuple(ParamOption(value, label) for value, label in pairs)
 
 
-FUNCTIONS: tuple[FunctionSpec, ...] = (
+_LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
     FunctionSpec(
         id="universe.compose",
         name="유니버스 구성",
@@ -119,7 +121,7 @@ FUNCTIONS: tuple[FunctionSpec, ...] = (
     ),
     FunctionSpec(
         id="momentum.factor",
-        name="모멘텀 팩터 전략",
+        name="모멘텀 팩터 점수",
         category="momentum",
         category_label="모멘텀 신호",
         summary="과거 수익률이 높은 종목에 높은 점수를 준다.",
@@ -167,7 +169,7 @@ FUNCTIONS: tuple[FunctionSpec, ...] = (
     ),
     FunctionSpec(
         id="momentum.trend",
-        name="추세추종 전략",
+        name="추세 상태 조건",
         category="momentum",
         category_label="모멘텀 신호",
         summary="이동평균 배열이나 가격 위치로 상승 추세 종목을 고른다.",
@@ -215,7 +217,7 @@ FUNCTIONS: tuple[FunctionSpec, ...] = (
     ),
     FunctionSpec(
         id="momentum.breakout",
-        name="신고가 돌파",
+        name="신고가 돌파 상태 조건",
         category="momentum",
         category_label="모멘텀 신호",
         summary="정해진 기간의 고점을 돌파한 종목에 매수 신호를 준다.",
@@ -672,6 +674,82 @@ FUNCTIONS: tuple[FunctionSpec, ...] = (
         ),
     ),
 )
+
+# 기존 ID와 포트 키는 유지한다. 점수·상태 조건·비중은 전략 최종 결과가 아닌 중간값이다.
+_SCORE_IDS = {
+    "momentum.factor", "factor.value", "factor.quality", "factor.low-volatility"
+}
+_REQUIRED_DATA: dict[str, RequiredData] = {
+    "momentum.factor": RequiredData(("close",), 252, "1d"),
+    "momentum.trend": RequiredData(("close",), 60, "1d"),
+    "momentum.breakout": RequiredData(("high", "close"), 253, "1d"),
+    "factor.value": RequiredData(("per", "pbr", "psr", "available_at")),
+    "factor.quality": RequiredData(("roe", "roa", "debt_ratio", "available_at")),
+    "factor.low-volatility": RequiredData(("close",), 252, "1d"),
+}
+
+
+def _legacy_role(fn: FunctionSpec) -> str:
+    if fn.category == "universe":
+        return "UNIVERSE"
+    if fn.id in _SCORE_IDS:
+        return "INDICATOR"
+    if fn.category == "logic":
+        return "LOGIC"
+    if fn.category == "allocation":
+        return "ALLOCATION"
+    return "CONDITION"
+
+
+_RESULT_OUT = PortSpec(
+    "result", "전략 판단", "strategy_result", "공통 StrategyResult 스키마.", required=True
+)
+_EVENT_ENTRY = PortSpec("entry", "진입 이벤트", "event", "진입 발생 시점만 참.", required=True)
+_EVENT_EXIT = PortSpec("exit", "청산 이벤트", "event", "청산 발생 시점만 참.", required=True)
+
+_NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
+    FunctionSpec(
+        id="momentum.ma-cross", name="이동평균 교차 이벤트", category="momentum",
+        category_label="모멘텀 신호", summary="전일과 당일의 단기·장기 평균을 비교해 교차한 순간만 출력한다.",
+        inputs=(_UNIVERSE_IN,),
+        outputs=(
+            PortSpec("entry", "골든크로스", "event", "상향 교차가 발생한 시점.", True),
+            PortSpec("exit", "데드크로스", "event", "하향 교차가 발생한 시점.", True),
+        ),
+        params=(
+            ParamSpec("fastDays", "단기 기간", "integer", "장기보다 짧아야 한다.", 20, min=1),
+            ParamSpec("slowDays", "장기 기간", "integer", "단기보다 길어야 한다.", 60, min=2),
+        ),
+        role="EVENT", required_data=RequiredData(("close",), 61, "1d"),
+    ),
+    FunctionSpec(
+        id="strategy.state", name="상태 평가 전략", category="strategy", category_label="전략 판단",
+        summary="조건의 현재 상태를 매 평가 시점에 목표 보유 상태로 바꾼다.",
+        inputs=(_UNIVERSE_IN, PortSpec("condition", "상태 조건", "signal", "참이면 선정, 거짓이면 목표 비중 0.", True)),
+        outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="STATE_REBALANCE",
+    ),
+    FunctionSpec(
+        id="strategy.event", name="이벤트 생애주기 전략", category="strategy", category_label="전략 판단",
+        summary="진입·청산 이벤트와 현재 포지션을 비교해 한 번의 전이만 발생시킨다.",
+        inputs=(_UNIVERSE_IN, _EVENT_ENTRY, _EVENT_EXIT), outputs=(_RESULT_OUT,), params=(),
+        role="STRATEGY", strategy_execution_type="EVENT_LIFECYCLE",
+    ),
+    FunctionSpec(
+        id="strategy.hybrid", name="상태·이벤트 혼합 전략", category="strategy", category_label="전략 판단",
+        summary="상태 조건으로 진입 가능성을 제한하고 이벤트로 진입·청산한다.",
+        inputs=(
+            _UNIVERSE_IN,
+            PortSpec("eligible", "투자 가능 상태", "signal", "진입을 허용하는 지속 조건.", True),
+            _EVENT_ENTRY, _EVENT_EXIT,
+        ),
+        outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="HYBRID",
+    ),
+)
+
+FUNCTIONS: tuple[FunctionSpec, ...] = tuple(
+    replace(fn, role=_legacy_role(fn), required_data=_REQUIRED_DATA.get(fn.id, RequiredData()))
+    for fn in _LEGACY_FUNCTIONS
+) + _NEW_FUNCTIONS
 
 _BY_ID = {fn.id: fn for fn in FUNCTIONS}
 

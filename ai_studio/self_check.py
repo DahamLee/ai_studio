@@ -5,8 +5,8 @@ from ai_studio.schema import StrategyEdge, StrategyGraph, StrategyNode
 
 def main() -> None:
     ids = [fn.id for fn in FUNCTIONS]
-    if len(ids) != 14:
-        raise SystemExit(f"함수는 14개여야 합니다. 현재 {len(ids)}개")
+    if len(ids) != 18:
+        raise SystemExit(f"함수는 18개여야 합니다. 현재 {len(ids)}개")
     if len(set(ids)) != len(ids):
         raise SystemExit("함수 id가 중복되었습니다.")
 
@@ -67,6 +67,15 @@ def main() -> None:
 
     if combine.inputs[0].min_connections != 2:
         raise SystemExit("복수 조건 조합은 신호 2개 이상을 요구해야 합니다.")
+
+    event = get_function("momentum.ma-cross")
+    strategy = get_function("strategy.event")
+    if can_connect(compose.outputs[0], strategy.inputs[0]).ok is False:
+        raise SystemExit("유니버스 출력은 전략 입력과 연결되어야 합니다.")
+    if can_connect(momentum.outputs[0], strategy.inputs[1]).ok:
+        raise SystemExit("점수는 이벤트 입력에 연결되면 안 됩니다.")
+    if not can_connect(event.outputs[0], strategy.inputs[1]).ok:
+        raise SystemExit("교차 이벤트를 이벤트 전략에 연결할 수 있어야 합니다.")
 
     print(f"ok {len(FUNCTIONS)} functions")
 

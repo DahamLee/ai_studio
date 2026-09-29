@@ -3,17 +3,43 @@
 from dataclasses import dataclass
 from typing import Literal
 
-PortType = Literal["universe", "signal", "score", "weight"]
+PortType = Literal["universe", "signal", "event", "score", "weight", "strategy_result"]
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
-FunctionCategory = Literal["universe", "momentum", "allocation", "factor", "logic"]
+FunctionCategory = Literal["universe", "momentum", "allocation", "factor", "logic", "strategy"]
+ExecutionType = Literal[
+    "STATE_REBALANCE", "EVENT_LIFECYCLE", "HYBRID", "MULTI_LEG_EVENT",
+    "EXECUTION_ALGORITHM", "ANALYSIS_FUNCTION",
+]
 ParamValue = str | int | float | bool
+
+EXECUTION_TYPE_METADATA: dict[str, dict[str, str]] = {
+    "STATE_REBALANCE": {"ko_name": "상태 평가·리밸런싱형", "behavior_type": "일반조건형"},
+    "EVENT_LIFECYCLE": {"ko_name": "이벤트·포지션 생애주기형", "behavior_type": "이벤트형"},
+    "HYBRID": {"ko_name": "조건·이벤트 혼합형", "behavior_type": "혼합형"},
+    "MULTI_LEG_EVENT": {"ko_name": "다중 포지션 이벤트형", "behavior_type": "이벤트형"},
+    "EXECUTION_ALGORITHM": {"ko_name": "주문 집행 알고리즘", "behavior_type": "집행형"},
+    "ANALYSIS_FUNCTION": {"ko_name": "분석·지원 기능", "behavior_type": "분석형"},
+}
 
 PORT_TYPE_LABEL: dict[str, str] = {
     "universe": "종목 집합",
-    "signal": "매수·매도 신호",
+    "signal": "상태 조건",
+    "event": "발생 시점 이벤트",
     "score": "종목 점수",
     "weight": "목표 비중",
+    "strategy_result": "전략 판단 결과",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class RequiredData:
+    fields: tuple[str, ...] = ()
+    minimum_history: int = 0
+    frequency: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.minimum_history < 0:
+            raise ValueError("minimum_history는 음수일 수 없습니다.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +86,18 @@ class FunctionSpec:
     inputs: tuple[PortSpec, ...]
     outputs: tuple[PortSpec, ...]
     params: tuple[ParamSpec, ...]
+    version: str = "1.0.0"
+    role: Literal["UNIVERSE", "INDICATOR", "CONDITION", "EVENT", "LOGIC", "ALLOCATION", "STRATEGY"] = "CONDITION"
+    strategy_execution_type: ExecutionType | None = None
+    required_data: RequiredData = RequiredData()
+    input_schema_version: str = "1.0.0"
+    output_schema_version: str = "1.0.0"
+
+    @property
+    def behavior_type(self) -> str | None:
+        if self.strategy_execution_type is None:
+            return None
+        return EXECUTION_TYPE_METADATA[self.strategy_execution_type]["behavior_type"]
 
 
 @dataclass(frozen=True, slots=True)
