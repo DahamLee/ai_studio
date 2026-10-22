@@ -4,13 +4,16 @@ This deliberately leaves data sourcing, corporate actions, borrow, tax and live
 broker order management to production adapters. It never mutates its inputs.
 """
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Mapping, Sequence
 
-from ai_studio.runtime import (
+from ai_studio.n07_runtime import (
     AssetSignal, Fill, MarketBar, PositionState, StrategyResult,
-    StrategyValidationError, fill_at_next_open, generate_orders,
+    StrategyValidationError, execution_open, fill_at_next_open, generate_orders,
+    trade_notional,
 )
 
 
@@ -125,3 +128,62 @@ def run_backtest(
         previous_value = total
     return BacktestResult(tuple(signal_history), tuple(trade_log),
                           tuple(position_history), tuple(portfolio_history))
+
+
+TRADE_COLUMNS = (
+    "signal_date", "filled_date", "symbol", "side", "quantity",
+    "open", "high", "low", "close", "fill_price",
+    "buy_amount", "sell_amount", "fee", "slippage", "cash_after",
+)
+
+
+def trade_rows(
+    result: BacktestResult, *, initial_cash: float,
+    ohlc: Mapping[tuple[str, str], object] | None = None,
+) -> tuple[dict[str, object], ...]:
+    """체결 한 건을 한 행으로 만든다. 매수금·매도금은 수수료를 넣기 전이다.
+
+    현금은 매수일에 매수금과 수수료를 빼고, 매도일에 매도금에서 수수료를 뺀 금액을 더한다.
+    `ohlc`의 키는 (종목, 체결일)이고 값은 open, high, low, close를 가진다.
+    """
+    if initial_cash < 0:
+        raise StrategyValidationError("initial_cash는 음수일 수 없습니다.")
+    cash = initial_cash
+    rows: list[dict[str, object]] = []
+    for fill in result.trade_log:
+        buy_amount, sell_amount = trade_notional(fill)
+        cash += sell_amount - buy_amount - fill.fee
+        filled_date = fill.filled_at.date().isoformat()
+        bar = None if ohlc is None else ohlc.get((fill.symbol, filled_date))
+        rows.append({
+            "signal_date": fill.signal_at.date().isoformat(),
+            "filled_date": filled_date,
+            "symbol": fill.symbol,
+            "side": fill.side,
+            "quantity": fill.quantity,
+            "open": getattr(bar, "open", execution_open(fill)),
+            "high": None if bar is None else bar.high,
+            "low": None if bar is None else bar.low,
+            "close": None if bar is None else bar.close,
+            "fill_price": fill.price,
+            "buy_amount": buy_amount,
+            "sell_amount": sell_amount,
+            "fee": fill.fee,
+            "slippage": fill.slippage,
+            "cash_after": cash,
+        })
+    return tuple(rows)
+
+
+def write_trades_csv(
+    result: BacktestResult, path: str | Path, *, initial_cash: float,
+    ohlc: Mapping[tuple[str, str], object] | None = None,
+) -> Path:
+    """매매 내역을 CSV로 쓴다. 열은 `trade_rows`와 같다."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=TRADE_COLUMNS)
+        writer.writeheader()
+        writer.writerows(trade_rows(result, initial_cash=initial_cash, ohlc=ohlc))
+    return destination

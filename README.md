@@ -35,7 +35,7 @@
 
 ```python
 from datetime import datetime, timezone
-from ai_studio.runtime import UniverseFrame, evaluate_state, generate_orders
+from ai_studio.n07_runtime import UniverseFrame, evaluate_state, generate_orders
 
 t = datetime(2026, 9, 29, 20, tzinfo=timezone.utc)
 u = UniverseFrame(t, ("AAPL", "MSFT"))
@@ -51,12 +51,13 @@ orders = generate_orders(result, {}, {"AAPL": 100, "MSFT": 200},
 ### 골든크로스 이벤트
 
 ```python
-from ai_studio.runtime import moving_average_cross_events, evaluate_events, fill_at_next_open
+from ai_studio.n07_runtime import evaluate_events, fill_at_next_open
+from ai_studio.n05_signals import moving_average_cross_events
 
 # MarketBar는 종가 시각(timestamp), 실제 공개 시각(available_at),
 # 다음 봉의 시가 시각(open_at)을 구분합니다.
 crosses = moving_average_cross_events(history, fast_days=20, slow_days=60)
-# 이전 단기평균 <= 이전 장기평균, 현재 단기평균 > 현재 장기평균인 날만 entry=True
+# 이전 단기평균이 장기 이하고 현재 단기평균이 장기보다 큰 날만 kind가 entry인 행이 생긴다.
 result = evaluate_events("golden_cross", universe, {"AAPL"}, set(), positions)
 # FLAT: ENTER/LONG; 이미 LONG: HOLD/UNCHANGED
 orders = generate_orders(result, positions, reference_prices,
@@ -72,6 +73,6 @@ fills, new_positions, cash = fill_at_next_open(orders, next_bars, positions, 100
 이 참조 구현은 시점별 입력을 **호출자가 제공**합니다. 재무자료의 실제 공개시점, 지수 편입 이력, 상장폐지, 거래정지, 분할·배당, 세금, 거래소 캘린더, 부분체결 및 실제 주문 거부를 자동 처리하지 않습니다. 실데이터 어댑터는 `available_at <= 신호 계산 시각`을 보장해야 하며, 수정주가로 만든 신호와 실제 체결가격·수량은 기업행동 처리로 맞춰야 합니다. 기준 종가로 신호를 만든 당일 종가 체결은 허용하지 않습니다. 다음 시가가 예상 가격보다 급변해 현금이 부족하면 참조 체결기는 명확한 오류를 반환합니다. 운영 백테스트에서는 주문 축소·거부 정책과 미체결 상태를 추가해야 합니다.
 
 ```bash
-python -m ai_studio.self_check
+python -m ai_studio.n16_self_check
 python -m unittest discover -s tests -v
 ```

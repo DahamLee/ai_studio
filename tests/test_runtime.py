@@ -1,15 +1,17 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from tempfile import TemporaryDirectory
 
-from ai_studio.connect import can_connect, validate_graph
-from ai_studio.backtest import run_backtest
-from ai_studio.functions import FUNCTIONS, get_function
-from ai_studio.runtime import (
+from ai_studio.n13_connect import can_connect, validate_graph
+from ai_studio.n09_backtest import run_backtest, trade_rows, write_trades_csv
+from ai_studio.n10_functions import FUNCTIONS, function_catalog, get_function
+from ai_studio.n07_runtime import (
     MarketBar, OrderIntent, PositionState, StrategyValidationError, UniverseFrame,
-    evaluate_events, evaluate_state, fill_at_next_open, generate_orders,
-    moving_average_cross_events,
+    evaluate_events, evaluate_state, execution_open, fill_at_next_open, generate_orders,
+    trade_notional,
 )
-from ai_studio.schema import StrategyEdge, StrategyGraph, StrategyNode
+from ai_studio.n05_signals import moving_average_cross_events
+from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 
 T = datetime(2026, 1, 2, 16, tzinfo=timezone.utc)
 
@@ -24,6 +26,20 @@ def bars(symbol, closes, offset=0):
 
 
 class ContractTests(unittest.TestCase):
+    def test_catalog_instance_keeps_defaults_only(self):
+        catalog = function_catalog()
+        functions = catalog["functions"]
+        self.assertEqual(len(functions), len(FUNCTIONS))
+        compose = next(fn for fn in functions if fn["id"] == "universe.compose")
+        self.assertEqual(compose["instance"]["id"], "universe_compose")
+        self.assertEqual(compose["instance"]["function_id"], "universe.compose")
+        self.assertEqual(
+            compose["instance"]["params"],
+            {"market": "US_EQUITY", "benchmark": "SPX", "minMarketCap": 0},
+        )
+        state = next(fn for fn in functions if fn["id"] == "strategy.state")
+        self.assertEqual(state["instance"]["params"], {})
+
     def test_registry_and_universe_ports(self):
         self.assertEqual(len(FUNCTIONS), len({f.id for f in FUNCTIONS}))
         source = get_function("universe.compose").outputs[0]
@@ -62,18 +78,18 @@ class ContractTests(unittest.TestCase):
 class SignalTests(unittest.TestCase):
     def test_golden_cross_is_one_day_only(self):
         events = moving_average_cross_events(bars("A", [3, 2, 1, 1, 3, 4]), 2, 3)
-        self.assertEqual([(e.as_of, e.entry) for e in events], [(T + timedelta(days=4), True)])
+        self.assertEqual([(e.as_of, e.kind) for e in events.rows], [(T + timedelta(days=4), "entry")])
 
     def test_death_cross_only_once(self):
         events = moving_average_cross_events(bars("A", [3, 2, 1, 1, 3, 4, 3, 1, .5]), 2, 3)
-        self.assertEqual(sum(e.exit for e in events), 1)
+        self.assertEqual(sum(e.kind == "exit" for e in events.rows), 1)
 
     def test_symbols_are_not_mixed(self):
         data = bars("A", [3, 2, 1, 1, 3, 4]) + bars("B", [100] * 6)
-        self.assertEqual({e.symbol for e in moving_average_cross_events(data, 2, 3)}, {"A"})
+        self.assertEqual({e.instrument_id for e in moving_average_cross_events(data, 2, 3).rows}, {"A"})
 
     def test_warmup_never_becomes_false_signal(self):
-        self.assertEqual(moving_average_cross_events(bars("A", [3, 2, 1]), 2, 3), ())
+        self.assertEqual(moving_average_cross_events(bars("A", [3, 2, 1]), 2, 3).rows, ())
 
     def test_duplicate_bars_rejected(self):
         data = bars("A", [1, 2, 3])
@@ -183,6 +199,41 @@ class LifecycleTests(unittest.TestCase):
         output = run_backtest([result], {T: {"A": 10}}, {T: {}}, initial_cash=0)
         self.assertEqual(len(output.signal_history), 1)
         self.assertEqual(output.trade_log, ())
+
+    def test_notional_excludes_fee_and_csv_keeps_cash(self):
+        next_open = T + timedelta(days=1) - timedelta(hours=6, minutes=30)
+        bought = MarketBar(T + timedelta(days=1), T + timedelta(days=1), "A", 10, 11, open_at=next_open)
+        buy_result = evaluate_events("s", universe("A"), {"A"}, set(), {}, entry_weight=1)
+        bought_book = run_backtest([buy_result], {T: {"A": 10}}, {T: {"A": bought}},
+                                   initial_cash=100, fee_rate=.01, slippage_rate=.01)
+        fill = bought_book.trade_log[0]
+        buy_amount, sell_amount = trade_notional(fill)
+        self.assertAlmostEqual(execution_open(fill), 10)
+        self.assertAlmostEqual(buy_amount, fill.quantity * 10.1)
+        self.assertEqual(sell_amount, 0)
+        self.assertAlmostEqual(fill.fee, fill.quantity * 10.1 * .01)
+        self.assertNotAlmostEqual(buy_amount, buy_amount + fill.fee)
+        rows = trade_rows(bought_book, initial_cash=100)
+        self.assertAlmostEqual(rows[0]["cash_after"], 100 - buy_amount - fill.fee)
+        self.assertAlmostEqual(rows[0]["buy_amount"], buy_amount)
+
+        sell_at = next_open + timedelta(days=1)
+        sold = MarketBar(T + timedelta(days=2), T + timedelta(days=2), "A", 12, 13,
+                         open_at=sell_at)
+        sells, _, cash = fill_at_next_open(
+            [OrderIntent("A", "SELL", fill.quantity, next_open)],
+            {"A": sold}, {"A": PositionState("A", fill.quantity, fill.price)},
+            rows[0]["cash_after"], fee_rate=.01, slippage_rate=.01,
+        )
+        _, sell_notional = trade_notional(sells[0])
+        self.assertAlmostEqual(execution_open(sells[0]), 12)
+        self.assertAlmostEqual(sell_notional, fill.quantity * 12 * .99)
+        self.assertAlmostEqual(cash, rows[0]["cash_after"] + sell_notional - sells[0].fee)
+        with TemporaryDirectory() as folder:
+            path = write_trades_csv(bought_book, f"{folder}/trades.csv", initial_cash=100)
+            text = path.read_text(encoding="utf-8").splitlines()
+        self.assertIn("buy_amount", text[0])
+        self.assertEqual(len(text), 2)
 
 
 if __name__ == "__main__":

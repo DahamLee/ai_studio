@@ -1,16 +1,16 @@
 import unittest
 
-from ai_studio.frames import IndicatorFrame, IndicatorRow, ScoreFrame, ScoreRow, TargetPortfolio
-from ai_studio.portfolio import (
+from ai_studio.n01_frames import IndicatorFrame, IndicatorRow, ScoreFrame, ScoreRow, TargetPortfolio
+from ai_studio.n06_portfolio import (
     apply_cash_weight,
     cap_max_weight,
-    compare_threshold,
     select_min_score,
     select_top_n,
     to_target_portfolio,
     weight_by_score,
     weight_equal,
 )
+from ai_studio.n05_signals import compare_threshold
 
 
 def scores(*pairs: tuple[str, float]) -> ScoreFrame:
@@ -53,7 +53,7 @@ class PortfolioStageTests(unittest.TestCase):
             "lt",
             30,
         )
-        self.assertEqual(result, {"AAPL": True, "MSFT": False})
+        self.assertEqual(result.matches(), {"AAPL": True, "MSFT": False})
 
     def test_target_portfolio_has_no_order_quantity(self):
         target = to_target_portfolio(weight_equal(select_top_n(scores(("AAPL", 1),), 1)))

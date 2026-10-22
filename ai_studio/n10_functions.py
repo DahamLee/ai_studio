@@ -1,6 +1,8 @@
 from dataclasses import replace
 
-from ai_studio.schema import FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData
+from ai_studio.n02_schema import (
+    PORT_TYPE_LABEL, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData,
+)
 
 _UNIVERSE_OUT = PortSpec(
     "universe",
@@ -120,6 +122,26 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         ),
     ),
     FunctionSpec(
+        id="universe.min-price",
+        name="최소 가격",
+        category="universe",
+        category_label="유니버스",
+        summary="기준일 종가가 하한보다 낮은 종목을 뺀다. 가격 외의 조건은 보지 않는다.",
+        inputs=(_UNIVERSE_IN,),
+        outputs=(_UNIVERSE_OUT,),
+        params=(
+            ParamSpec(
+                "minClose",
+                "최소 종가",
+                "number",
+                "기준일 종가가 이 값보다 낮으면 제외한다. 0이면 제한 없음.",
+                default=0,
+                min=0,
+                unit="달러",
+            ),
+        ),
+    ),
+    FunctionSpec(
         id="momentum.factor",
         name="모멘텀 팩터 점수",
         category="momentum",
@@ -162,14 +184,14 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         id="momentum.trend",
         name="추세 상태 조건",
         category="momentum",
-        category_label="모멘텀 신호",
+        category_label="모멘텀 조건",
         summary="이동평균 배열이나 가격 위치로 상승 추세 종목을 고른다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
-                "signal",
-                "추세 신호",
-                "signal",
+                "condition",
+                "추세 조건",
+                "condition",
                 "상승 추세로 판단된 종목은 참, 나머지는 거짓.",
                 required=True,
             ),
@@ -210,14 +232,14 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         id="momentum.breakout",
         name="신고가 돌파 상태 조건",
         category="momentum",
-        category_label="모멘텀 신호",
-        summary="정해진 기간의 고점을 돌파한 종목에 매수 신호를 준다.",
+        category_label="모멘텀 조건",
+        summary="정해진 기간의 고점을 돌파했는지 종목별 조건을 계산한다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec(
-                "signal",
-                "돌파 신호",
-                "signal",
+                "condition",
+                "돌파 조건",
+                "condition",
                 "고점 돌파 조건에 맞는 종목은 참.",
                 required=True,
             ),
@@ -487,13 +509,13 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="복수 조건 조합",
         category="logic",
         category_label="논리",
-        summary="여러 매수·매도 신호를 AND 또는 OR로 하나로 합친다.",
+        summary="여러 상태 조건을 AND 또는 OR로 하나로 합친다.",
         inputs=(
             PortSpec(
-                "signals",
-                "신호",
-                "signal",
-                "합칠 신호. 두 개 이상 연결한다.",
+                "conditions",
+                "조건",
+                "condition",
+                "합칠 조건. 두 개 이상 연결한다.",
                 required=True,
                 multiple=True,
                 min_connections=2,
@@ -501,9 +523,9 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         ),
         outputs=(
             PortSpec(
-                "signal",
-                "결합 신호",
-                "signal",
+                "condition",
+                "결합 조건",
+                "condition",
                 "조합 규칙으로 합쳐진 참·거짓.",
                 required=True,
             ),
@@ -513,7 +535,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "operator",
                 "조합",
                 "enum",
-                "모든 신호가 참이어야 하는지, 하나면 충분한지.",
+                "모든 조건이 참이어야 하는지, 하나면 충분한지.",
                 default="and",
                 options=_opts(("and", "모두 참 (AND)"), ("or", "하나라도 참 (OR)")),
             ),
@@ -524,13 +546,13 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="IF - ELSE",
         category="logic",
         category_label="논리",
-        summary="조건 신호가 참이면 한쪽 결과를, 거짓이면 다른 쪽 결과를 내보낸다.",
+        summary="조건이 참이면 한쪽 결과를, 거짓이면 다른 쪽 결과를 내보낸다.",
         inputs=(
             PortSpec(
                 "condition",
                 "조건",
-                "signal",
-                "어느 분기를 쓸지 정하는 참·거짓 신호.",
+                "condition",
+                "어느 분기를 쓸지 정하는 참·거짓 조건.",
                 required=True,
             ),
             PortSpec(
@@ -539,7 +561,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "score",
                 "조건이 참일 때 내보낼 값.",
                 required=True,
-                accepts=("universe", "signal", "score", "weight"),
+                accepts=("universe", "condition", "score", "weight"),
             ),
             PortSpec(
                 "elseBranch",
@@ -547,7 +569,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "score",
                 "조건이 거짓일 때 내보낼 값. 참일 때와 같은 타입이어야 한다.",
                 required=True,
-                accepts=("universe", "signal", "score", "weight"),
+                accepts=("universe", "condition", "score", "weight"),
                 same_type_as="thenBranch",
             ),
         ),
@@ -558,7 +580,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "score",
                 "조건에 따라 둘 중 하나가 나온 결과. 타입은 두 분기와 같다.",
                 required=True,
-                accepts=("universe", "signal", "score", "weight"),
+                accepts=("universe", "condition", "score", "weight"),
                 mirrors="thenBranch",
             ),
         ),
@@ -569,7 +591,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
         name="전략 집합 연산",
         category="logic",
         category_label="논리",
-        summary="두 종목 집합 또는 두 신호를 합집합, 교집합, 차집합으로 합친다.",
+        summary="두 종목 집합 또는 두 조건을 합집합, 교집합, 차집합으로 합친다.",
         inputs=(
             PortSpec(
                 "left",
@@ -577,7 +599,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "universe",
                 "연산의 기준 집합.",
                 required=True,
-                accepts=("universe", "signal"),
+                accepts=("universe", "condition"),
             ),
             PortSpec(
                 "right",
@@ -585,7 +607,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "universe",
                 "기준 집합과 합칠 집합. 왼쪽과 같은 타입이어야 한다.",
                 required=True,
-                accepts=("universe", "signal"),
+                accepts=("universe", "condition"),
                 same_type_as="left",
             ),
         ),
@@ -596,7 +618,7 @@ _LEGACY_FUNCTIONS: tuple[FunctionSpec, ...] = (
                 "universe",
                 "집합 연산 결과. 타입은 입력과 같다.",
                 required=True,
-                accepts=("universe", "signal"),
+                accepts=("universe", "condition"),
                 mirrors="left",
             ),
         ),
@@ -656,7 +678,7 @@ _EVENT_EXIT = PortSpec("exit", "청산 이벤트", "event", "청산 발생 시�
 _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
     FunctionSpec(
         id="momentum.ma-cross", name="이동평균 교차 이벤트", category="momentum",
-        category_label="모멘텀 신호", summary="전일과 당일의 단기·장기 평균을 비교해 교차한 순간만 출력한다.",
+        category_label="모멘텀 이벤트", summary="전일과 당일의 단기·장기 평균을 비교해 교차한 순간만 출력한다.",
         inputs=(_UNIVERSE_IN,),
         outputs=(
             PortSpec("entry", "골든크로스", "event", "상향 교차가 발생한 시점.", True),
@@ -671,7 +693,7 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
     FunctionSpec(
         id="strategy.state", name="상태 평가 전략", category="strategy", category_label="전략 판단",
         summary="조건의 현재 상태를 매 평가 시점에 목표 보유 상태로 바꾼다.",
-        inputs=(_UNIVERSE_IN, PortSpec("condition", "상태 조건", "signal", "참이면 선정, 거짓이면 목표 비중 0.", True)),
+        inputs=(_UNIVERSE_IN, PortSpec("condition", "상태 조건", "condition", "참이면 선정, 거짓이면 목표 비중 0.", True)),
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="STATE_REBALANCE",
     ),
     FunctionSpec(
@@ -685,7 +707,7 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
         summary="상태 조건으로 진입 가능성을 제한하고 이벤트로 진입·청산한다.",
         inputs=(
             _UNIVERSE_IN,
-            PortSpec("eligible", "투자 가능 상태", "signal", "진입을 허용하는 지속 조건.", True),
+            PortSpec("eligible", "투자 가능 상태", "condition", "진입을 허용하는 지속 조건.", True),
             _EVENT_ENTRY, _EVENT_EXIT,
         ),
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="HYBRID",
@@ -716,7 +738,7 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
             PortSpec("value", "지표 값", "indicator", "비교할 지표.", True),
         ),
         outputs=(
-            PortSpec("signal", "조건", "signal", "비교 결과를 만족하면 참.", True),
+            PortSpec("condition", "조건", "condition", "비교 결과를 만족하면 참.", True),
         ),
         params=(
             ParamSpec(
@@ -825,3 +847,58 @@ def get_function(function_id: str) -> FunctionSpec:
         return _BY_ID[function_id]
     except KeyError as error:
         raise KeyError(f"알 수 없는 함수입니다: {function_id}") from error
+
+
+def instance_id(function_id: str) -> str:
+    """함수 id의 점과 하이픈을 밑줄로 바꾼 인스턴스 id. 두 번째 블록은 `_2`를 붙인다."""
+    return function_id.replace(".", "_").replace("-", "_")
+
+
+def _port_dict(port: PortSpec) -> dict[str, object]:
+    return {
+        "key": port.key,
+        "label": port.label,
+        "type": port.type,
+        "typeLabel": PORT_TYPE_LABEL[port.type],
+        "description": port.description,
+        "required": port.required,
+        "multiple": port.multiple,
+        "minConnections": port.min_connections,
+    }
+
+
+def _param_dict(param: ParamSpec) -> dict[str, object]:
+    return {
+        "key": param.key,
+        "label": param.label,
+        "type": param.type,
+        "description": param.description,
+        "default": param.default,
+        "options": [{"value": option.value, "label": option.label} for option in param.options],
+        "unit": param.unit,
+        "min": param.min,
+        "max": param.max,
+    }
+
+
+def function_catalog() -> dict[str, object]:
+    """팔레트가 그리는 함수 정의. 인스턴스 JSON은 캔버스에 놓을 때의 기본값이다."""
+    functions = []
+    for fn in FUNCTIONS:
+        params = {param.key: param.default for param in fn.params if param.default is not None}
+        functions.append({
+            "id": fn.id,
+            "name": fn.name,
+            "category": fn.category,
+            "categoryLabel": fn.category_label,
+            "summary": fn.summary,
+            "inputs": [_port_dict(port) for port in fn.inputs],
+            "outputs": [_port_dict(port) for port in fn.outputs],
+            "params": [_param_dict(param) for param in fn.params],
+            "instance": {
+                "id": instance_id(fn.id),
+                "function_id": fn.id,
+                "params": params,
+            },
+        })
+    return {"functions": functions}

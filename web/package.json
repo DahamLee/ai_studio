@@ -1,0 +1,22 @@
+{
+  "name": "ai-studio-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "catalog": "cd .. && .venv/bin/python -c \"import json; from pathlib import Path; from ai_studio.n10_functions import function_catalog; path = Path('web/public/catalog.json'); path.parent.mkdir(exist_ok=True); path.write_text(json.dumps(function_catalog(), ensure_ascii=False, indent=2), encoding='utf-8')\"",
+    "dev": "npm run catalog && vite",
+    "build": "npm run catalog && tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}

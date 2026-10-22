@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 PortType = Literal[
-    "universe", "signal", "event", "indicator", "score", "selection",
+    "universe", "condition", "event", "indicator", "score", "selection",
     "weight", "target_portfolio", "strategy_result",
 ]
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
@@ -29,7 +29,7 @@ EXECUTION_TYPE_METADATA: dict[str, dict[str, str]] = {
 
 PORT_TYPE_LABEL: dict[str, str] = {
     "universe": "종목 집합",
-    "signal": "상태 조건",
+    "condition": "상태 조건",
     "event": "발생 시점 이벤트",
     "indicator": "지표 값",
     "score": "종목 점수",

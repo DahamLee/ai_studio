@@ -1,12 +1,12 @@
-from ai_studio.connect import can_connect, validate_graph
-from ai_studio.functions import FUNCTIONS, get_function
-from ai_studio.schema import StrategyEdge, StrategyGraph, StrategyNode
+from ai_studio.n13_connect import can_connect, validate_graph
+from ai_studio.n10_functions import FUNCTIONS, get_function
+from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 
 
 def main() -> None:
     ids = [fn.id for fn in FUNCTIONS]
-    if len(ids) != 25:
-        raise SystemExit(f"함수는 25개여야 합니다. 현재 {len(ids)}개")
+    if len(ids) != 26:
+        raise SystemExit(f"함수는 26개여야 합니다. 현재 {len(ids)}개")
     if len(set(ids)) != len(ids):
         raise SystemExit("함수 id가 중복되었습니다.")
 
@@ -35,14 +35,14 @@ def main() -> None:
             edges=(
                 StrategyEdge("u", "universe", "m", "universe"),
                 StrategyEdge("u", "universe", "t", "universe"),
-                StrategyEdge("m", "score", "and", "signals"),
-                StrategyEdge("t", "signal", "and", "signals"),
-                StrategyEdge("and", "signal", "w", "selection"),
+                StrategyEdge("m", "score", "and", "conditions"),
+                StrategyEdge("t", "condition", "and", "conditions"),
+                StrategyEdge("and", "condition", "w", "selection"),
             ),
         )
     )
     if mixed.ok:
-        raise SystemExit("점수와 신호를 AND로 합치는 그래프는 거부해야 합니다.")
+        raise SystemExit("점수와 조건을 AND로 합치는 그래프는 거부해야 합니다.")
 
     conditions = validate_graph(
         StrategyGraph(
@@ -55,8 +55,8 @@ def main() -> None:
             edges=(
                 StrategyEdge("u", "universe", "t", "universe"),
                 StrategyEdge("u", "universe", "b", "universe"),
-                StrategyEdge("t", "signal", "and", "signals"),
-                StrategyEdge("b", "signal", "and", "signals"),
+                StrategyEdge("t", "condition", "and", "conditions"),
+                StrategyEdge("b", "condition", "and", "conditions"),
             ),
         )
     )
@@ -87,10 +87,10 @@ def main() -> None:
     if not pipeline.ok:
         raise SystemExit(pipeline.reason)
 
-    signal = get_function("logic.combine").outputs[0]
+    condition = get_function("logic.combine").outputs[0]
     weighting = get_function("allocation.target-weight").inputs[0]
-    if can_connect(signal, weighting).ok:
-        raise SystemExit("조건 신호는 비중 블록에 바로 연결되면 안 됩니다.")
+    if can_connect(condition, weighting).ok:
+        raise SystemExit("조건은 비중 블록에 바로 연결되면 안 됩니다.")
     rsi = get_function("indicator.rsi").outputs[0]
     threshold = get_function("condition.threshold").inputs[0]
     if not can_connect(rsi, threshold).ok:
@@ -99,7 +99,7 @@ def main() -> None:
         raise SystemExit("점수는 조건 비교 입력에 연결되면 안 됩니다.")
 
     if combine.inputs[0].min_connections != 2:
-        raise SystemExit("복수 조건 조합은 신호 2개 이상을 요구해야 합니다.")
+        raise SystemExit("복수 조건 조합은 조건 2개 이상을 요구해야 합니다.")
 
     event = get_function("momentum.ma-cross")
     strategy = get_function("strategy.event")

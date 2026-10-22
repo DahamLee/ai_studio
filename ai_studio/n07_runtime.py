@@ -9,7 +9,7 @@ from datetime import datetime
 from math import floor, isfinite
 from typing import Literal, Mapping, Sequence
 
-from ai_studio.schema import ExecutionType
+from ai_studio.n02_schema import ExecutionType
 
 
 class StrategyValidationError(ValueError):
@@ -56,14 +56,6 @@ class MarketBar:
                 raise StrategyValidationError(f"{self.symbol}: 봉의 시가가 종가 이후일 수 없습니다.")
         if not self.symbol or not all(isfinite(p) and p > 0 for p in (self.open, self.close)):
             raise StrategyValidationError(f"bar {self.symbol} {self.timestamp}: 가격이 유효해야 합니다.")
-
-
-@dataclass(frozen=True, slots=True)
-class CrossEvent:
-    symbol: str
-    as_of: datetime
-    entry: bool
-    exit: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,42 +151,6 @@ class Fill:
     event_id: str | None = None
 
 
-def moving_average_cross_events(
-    bars: Sequence[MarketBar], fast_days: int, slow_days: int
-) -> tuple[CrossEvent, ...]:
-    """Emit crossings only when both previous and current averages exist."""
-    if fast_days < 1 or slow_days <= fast_days:
-        raise StrategyValidationError("moving_average_cross_events: 0 < fast_days < slow_days가 필요합니다.")
-    groups: dict[str, list[MarketBar]] = {}
-    seen: set[tuple[str, datetime]] = set()
-    for bar in bars:
-        if bar.available_at < bar.timestamp:
-            raise StrategyValidationError(f"{bar.symbol} {bar.timestamp}: 공개시점이 데이터 시점보다 빠릅니다.")
-        key = (bar.symbol, bar.timestamp)
-        if key in seen:
-            raise StrategyValidationError(f"중복 시계열: {bar.symbol} {bar.timestamp}")
-        seen.add(key)
-        groups.setdefault(bar.symbol, []).append(bar)
-    output: list[CrossEvent] = []
-    for symbol, series in groups.items():
-        series.sort(key=lambda bar: bar.timestamp)
-        if len({bar.frequency for bar in series}) != 1:
-            raise StrategyValidationError(f"{symbol}: 서로 다른 가격 주기가 섞여 있습니다.")
-        close = [bar.close for bar in series]
-        for i in range(slow_days, len(series)):
-            if any(bar.available_at > series[i].available_at for bar in series[i-slow_days:i+1]):
-                raise StrategyValidationError(f"{symbol} {series[i].timestamp}: 미래 공개 데이터가 포함됐습니다.")
-            previous_fast = sum(close[i-fast_days:i]) / fast_days
-            previous_slow = sum(close[i-slow_days:i]) / slow_days
-            current_fast = sum(close[i-fast_days+1:i+1]) / fast_days
-            current_slow = sum(close[i-slow_days+1:i+1]) / slow_days
-            entry = previous_fast <= previous_slow and current_fast > current_slow
-            exit_ = previous_fast >= previous_slow and current_fast < current_slow
-            if entry or exit_:
-                output.append(CrossEvent(symbol, series[i].available_at, entry, exit_))
-    return tuple(sorted(output, key=lambda row: (row.as_of, row.symbol)))
-
-
 def evaluate_state(
     strategy_id: str, universe: UniverseFrame, conditions: Mapping[str, bool],
     *, scores: Mapping[str, float] | None = None,
@@ -256,7 +212,12 @@ def generate_orders(
     allow_fractional_shares: bool = False, pending: Sequence[OrderIntent] = (),
     processed_event_ids: frozenset[str] = frozenset(),
 ) -> tuple[OrderIntent, ...]:
-    """Convert targets to order differences. Sell first and budget whole-share buys."""
+    """신호일 종가로 수량을 정한다. 매도는 먼저 넣고, 매수는 남은 현금으로 온주를 산다.
+
+    목표수량 = floor(평가금액 × 목표비중 / 종가)
+    1주 예산 = 종가 × (1 + 수수료율 + 슬리피지율)
+    매수수량 = min(목표수량 - 보유수량, floor(현금 / 1주 예산))
+    """
     for value, name in ((portfolio_value, "portfolio_value"), (cash, "cash"),
                         (fee_rate, "fee_rate"), (slippage_rate, "slippage_rate")):
         _nonnegative(value, name)
@@ -308,7 +269,14 @@ def fill_at_next_open(
     positions: Mapping[str, PositionState], cash: float, *,
     fee_rate: float = 0.0, slippage_rate: float = 0.0,
 ) -> tuple[tuple[Fill, ...], dict[str, PositionState], float]:
-    """Fill at a strictly later bar open; retain entry price and realized P&L."""
+    """다음 거래일 시가에 체결한다. 수수료는 체결대금과 따로 계산한다.
+
+    매수 체결가 = 시가 × (1 + 슬리피지율)
+    매도 체결가 = 시가 × (1 - 슬리피지율)
+    수수료 = 수량 × 체결가 × 수수료율
+    슬리피지 금액 = 수량 × |시가 - 체결가|
+    현금은 매수 때 체결대금과 수수료를 빼고, 매도 때 체결대금에서 수수료를 뺀 만큼 더한다.
+    """
     _nonnegative(cash, "cash")
     holdings = dict(positions)
     fills: list[Fill] = []
@@ -342,3 +310,19 @@ def fill_at_next_open(
                           bar.open_at, price, fee, abs(bar.open - price) * order.quantity, pnl,
                           order.event_id))
     return tuple(fills), holdings, cash
+
+
+def execution_open(fill: Fill) -> float:
+    """체결에 쓰인 시가. 매수는 체결가에서 주당 슬리피지를 빼고, 매도는 더한다."""
+    if fill.quantity == 0:
+        return fill.price
+    gap = fill.slippage / fill.quantity
+    return fill.price - gap if fill.side == "BUY" else fill.price + gap
+
+
+def trade_notional(fill: Fill) -> tuple[float, float]:
+    """수수료를 더하거나 빼기 전 체결대금. (매수금, 매도금) 중 해당 방향만 수량이 있다."""
+    amount = fill.quantity * fill.price
+    if fill.side == "BUY":
+        return amount, 0.0
+    return 0.0, amount

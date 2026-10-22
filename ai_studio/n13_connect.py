@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from datetime import date
 from math import isfinite
 
-from ai_studio.functions import get_function
-from ai_studio.schema import (
+from ai_studio.n10_functions import get_function
+from ai_studio.n02_schema import (
     FunctionSpec,
     PortSpec,
     PortType,

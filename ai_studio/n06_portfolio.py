@@ -1,7 +1,6 @@
 """점수 이후의 독립 단계. 각 함수는 한 가지 변환만 한다."""
 
-from ai_studio.frames import (
-    IndicatorFrame,
+from ai_studio.n01_frames import (
     ScoreFrame,
     SelectionFrame,
     SelectionRow,
@@ -10,13 +9,6 @@ from ai_studio.frames import (
     WeightFrame,
     WeightRow,
 )
-
-_OPERATORS = {
-    "lt": lambda value, threshold: value < threshold,
-    "lte": lambda value, threshold: value <= threshold,
-    "gt": lambda value, threshold: value > threshold,
-    "gte": lambda value, threshold: value >= threshold,
-}
 
 
 def select_top_n(scores: ScoreFrame, top_n: int) -> SelectionFrame:
@@ -94,27 +86,3 @@ def to_target_portfolio(weights: WeightFrame) -> TargetPortfolio:
     cash = 1 - sum(row.target_weight for row in positions)
     return TargetPortfolio(positions, cash)
 
-
-def compare_threshold(indicators: IndicatorFrame, operator: str, threshold: float) -> dict[str, bool]:
-    try:
-        predicate = _OPERATORS[operator]
-    except KeyError as error:
-        raise ValueError(f"지원하지 않는 비교입니다: {operator}") from error
-    return {row.instrument_id: predicate(row.value, threshold) for row in indicators.rows}
-
-
-def rsi(closes: list[float], period: int = 14) -> float:
-    if period < 2:
-        raise ValueError("RSI 기간은 2 이상이어야 합니다.")
-    if len(closes) < period + 1:
-        raise ValueError("RSI를 계산할 가격이 부족합니다.")
-    gains = 0.0
-    losses = 0.0
-    for index in range(-period, 0):
-        change = closes[index] - closes[index - 1]
-        gains += max(change, 0)
-        losses += max(-change, 0)
-    if losses == 0:
-        return 100.0
-    relative = (gains / period) / (losses / period)
-    return 100 - (100 / (1 + relative))
