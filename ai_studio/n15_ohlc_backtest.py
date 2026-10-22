@@ -3,21 +3,18 @@
 종목 선정과 비중은 실행기가 그래프에서 계산한다. 이 모듈은 주문과 체결 원장만 맡는다.
 """
 
-from datetime import datetime, time, timezone
+from datetime import datetime
 
+from ai_studio.n01_frames import MarketBar, UniverseFrame
+from ai_studio.n03_market_data import history_from_bars, load_ohlc
 from ai_studio.n09_backtest import BacktestResult, run_backtest
-from ai_studio.n08_blocks import history_from_bars
 from ai_studio.n14_engine import ExecutionContext, execute
-from ai_studio.n03_market_data import DailyBar, load_ohlc
-from ai_studio.n07_runtime import AssetSignal, MarketBar, StrategyResult, UniverseFrame
+from ai_studio.n07_runtime import AssetSignal, StrategyResult
 from ai_studio.n12_strategies import momentum_rebalance
-
-CLOSE = time(21, 0, tzinfo=timezone.utc)
-OPEN = time(14, 30, tzinfo=timezone.utc)
 
 
 def run_momentum_topn(
-    bars: tuple[DailyBar, ...] | None = None,
+    bars: tuple[MarketBar, ...] | None = None,
     *,
     lookback: int = 20,
     top_n: int = 10,
@@ -27,9 +24,9 @@ def run_momentum_topn(
 ) -> BacktestResult:
     rows = load_ohlc() if bars is None else bars
     history = history_from_bars(rows)
-    counts: dict[str, int] = {}
+    counts: dict[datetime, int] = {}
     for row in rows:
-        counts[row.date] = counts.get(row.date, 0) + 1
+        counts[row.timestamp] = counts.get(row.timestamp, 0) + 1
     dates = [day for day, count in sorted(counts.items()) if count >= 450]
     lookback_months = max(1, round(lookback / 21))
     warmup = lookback_months * 21
@@ -42,7 +39,7 @@ def run_momentum_topn(
         cash_weight_pct=cash_weight * 100,
     )
     by_date = {
-        symbol: {bar.date: bar for bar in series}
+        symbol: {bar.timestamp: bar for bar in series}
         for symbol, series in history.items()
     }
 
@@ -57,10 +54,9 @@ def run_momentum_topn(
         score_of = {row.instrument_id: row.score for row in executed.port("score", "score").rows}
         weight_of = {row.instrument_id: row.target_weight for row in target.positions}
         tradable = [
-            symbol for symbol in executed.port("universe", "universe").symbols()
+            symbol for symbol in executed.port("universe", "universe").symbols
             if day in by_date[symbol] and nxt in by_date[symbol]
         ]
-        as_of = datetime.combine(datetime.strptime(day, "%Y-%m-%d").date(), CLOSE)
         signals = tuple(
             AssetSignal(
                 symbol,
@@ -73,18 +69,10 @@ def run_momentum_topn(
             for symbol in tradable
         )
         results.append(StrategyResult(
-            as_of, "momentum-top10", "STATE_REBALANCE",
-            UniverseFrame(as_of, tuple(tradable)), signals,
+            day, "momentum-top10", "STATE_REBALANCE",
+            UniverseFrame(day, tuple(tradable)), signals,
             tuple((row.symbol, row.target_weight or 0.0) for row in signals),
         ))
-        reference_prices[as_of] = {symbol: by_date[symbol][day].close for symbol in tradable}
-        next_stamp = datetime.combine(datetime.strptime(nxt, "%Y-%m-%d").date(), CLOSE)
-        open_at = datetime.combine(next_stamp.date(), OPEN)
-        next_bars[as_of] = {
-            symbol: MarketBar(
-                next_stamp, next_stamp, symbol,
-                by_date[symbol][nxt].open, by_date[symbol][nxt].close, open_at=open_at,
-            )
-            for symbol in tradable
-        }
+        reference_prices[day] = {symbol: by_date[symbol][day].close for symbol in tradable}
+        next_bars[day] = {symbol: by_date[symbol][nxt] for symbol in tradable}
     return run_backtest(results, reference_prices, next_bars, initial_cash=initial_cash)

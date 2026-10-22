@@ -1,16 +1,17 @@
 """화면 블록의 계산.
 
-`functions.py`의 블록 id와 대응한다. 점수가 높을수록 더 선호되는 종목이다.
+`n10_functions`의 블록 id와 대응한다. 점수가 높을수록 더 선호되는 종목이다.
 가치·퀄리티 점수는 재무 항목이 필요해서 이 모듈에 없다.
 개월 수는 거래일 21일로 센다.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, time, timezone
+from datetime import datetime
 from math import sqrt
 
 from ai_studio.n01_frames import (
     EventFrame,
+    MarketBar,
     IndicatorFrame,
     IndicatorRow,
     ScoreFrame,
@@ -19,14 +20,12 @@ from ai_studio.n01_frames import (
     ConditionFrame,
     ConditionRow,
     UniverseFrame,
-    UniverseRow,
     WeightFrame,
     WeightRow,
 )
-from ai_studio.n03_market_data import DailyBar
+from ai_studio.n03_market_data import History, bars_until, session_date
 from ai_studio.n04_indicators import moving_average, rsi, window_high
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
-from ai_studio.n07_runtime import MarketBar
 from ai_studio.n05_signals import (
     breaks_prior_high,
     fast_average_above_slow,
@@ -35,29 +34,18 @@ from ai_studio.n05_signals import (
 )
 
 TRADING_DAYS_PER_MONTH = 21
-_CLOSE = time(21, 0, tzinfo=timezone.utc)
 
 
-def history_from_bars(bars: Sequence[DailyBar]) -> dict[str, tuple[DailyBar, ...]]:
-    grouped: dict[str, dict[str, DailyBar]] = {}
-    for bar in bars:
-        grouped.setdefault(bar.symbol, {})[bar.date] = bar
-    return {
-        symbol: tuple(days[day] for day in sorted(days))
-        for symbol, days in grouped.items()
-    }
-
-
-def compose_universe(history: Mapping[str, Sequence[DailyBar]], as_of: str) -> UniverseFrame:
+def compose_universe(history: History, as_of: datetime) -> UniverseFrame:
     """universe.compose. 적재된 종목 전체를 같은 유니버스 프레임으로 반환한다."""
     symbols = tuple(sorted(symbol for symbol, rows in history.items() if rows))
     return _universe(as_of, symbols)
 
 
 def exclude_universe(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     min_listing_days: int = 252,
     min_average_turnover: float = 0,
@@ -74,7 +62,7 @@ def exclude_universe(
     kept: list[str] = []
     for symbol in symbols:
         series = _upto(history, symbol, as_of)
-        if exclude_halted and (not series or series[-1].date != as_of):
+        if exclude_halted and (not series or session_date(series[-1].timestamp) != session_date(as_of)):
             continue
         if len(series) < min_listing_days:
             continue
@@ -87,9 +75,9 @@ def exclude_universe(
 
 
 def min_price_universe(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     min_close: float = 0,
 ) -> UniverseFrame:
@@ -101,13 +89,13 @@ def min_price_universe(
     kept: list[str] = []
     for symbol in symbols:
         series = _upto(history, symbol, as_of)
-        if series and series[-1].date == as_of and series[-1].close >= min_close:
+        if series and session_date(series[-1].timestamp) == session_date(as_of) and series[-1].close >= min_close:
             kept.append(symbol)
     return _universe(as_of, kept)
 
 
-def _universe(as_of: str, symbols: Sequence[str]) -> UniverseFrame:
-    return UniverseFrame(as_of, tuple(UniverseRow(symbol) for symbol in symbols))
+def _universe(as_of: datetime, symbols: Sequence[str]) -> UniverseFrame:
+    return UniverseFrame(as_of, tuple(symbols))
 
 
 def _condition(matches: Mapping[str, bool]) -> ConditionFrame:
@@ -115,9 +103,9 @@ def _condition(matches: Mapping[str, bool]) -> ConditionFrame:
 
 
 def momentum_score(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     lookback_months: int = 12,
     skip_months: int = 1,
@@ -140,9 +128,9 @@ def momentum_score(
 
 
 def trend_condition(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     method: str = "price_above_ma",
     fast_days: int = 20,
@@ -171,9 +159,9 @@ def trend_condition(
 
 
 def breakout_condition(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     window_days: int = 252,
     buffer_pct: float = 0,
@@ -194,9 +182,9 @@ def breakout_condition(
 
 
 def low_volatility_score(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     metric: str = "stdev",
     window_days: int = 252,
@@ -219,9 +207,9 @@ def low_volatility_score(
 
 
 def rsi_indicator(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     *,
     period: int = 14,
 ) -> IndicatorFrame:
@@ -236,18 +224,15 @@ def rsi_indicator(
 
 
 def moving_average_cross(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
+    as_of: datetime,
     *,
     fast_days: int = 20,
     slow_days: int = 60,
 ) -> EventFrame:
-    """momentum.ma-cross. 교차한 날만 진입 또는 청산 이벤트가 된다."""
-    bars: list[MarketBar] = []
-    for symbol in symbols:
-        for row in history.get(symbol, ()):
-            stamp = datetime.combine(datetime.strptime(row.date, "%Y-%m-%d").date(), _CLOSE)
-            bars.append(MarketBar(stamp, stamp, symbol, row.open, row.close))
+    """momentum.ma-cross. 교차한 날만 진입 또는 청산 이벤트가 된다. as_of 이후 봉은 보지 않는다."""
+    bars = [bar for symbol in symbols for bar in bars_until(history, symbol, as_of)]
     return moving_average_cross_events(bars, fast_days, slow_days)
 
 
@@ -387,11 +372,11 @@ def rebalance_weights(
     return target if drifted else actual
 
 
-def _upto(history: Mapping[str, Sequence[DailyBar]], symbol: str, as_of: str) -> tuple[DailyBar, ...]:
-    return tuple(bar for bar in history.get(symbol, ()) if bar.date <= as_of)
+def _upto(history: History, symbol: str, as_of: datetime) -> Sequence[MarketBar]:
+    return bars_until(history, symbol, as_of)
 
 
-def _tail_returns(series: Sequence[DailyBar], window: int) -> list[float]:
+def _tail_returns(series: Sequence[MarketBar], window: int) -> list[float]:
     closes = [bar.close for bar in series]
     if len(closes) < window + 1:
         return []
@@ -406,14 +391,14 @@ def _stdev(values: Sequence[float]) -> float:
 
 
 def _beta_scores(
-    history: Mapping[str, Sequence[DailyBar]],
+    history: History,
     symbols: Sequence[str],
-    as_of: str,
+    as_of: datetime,
     window_days: int,
 ) -> ScoreFrame:
-    by_symbol = {symbol: {bar.date: bar.close for bar in _upto(history, symbol, as_of)} for symbol in symbols}
+    by_symbol = {symbol: {bar.timestamp: bar.close for bar in _upto(history, symbol, as_of)} for symbol in symbols}
     dates = sorted({day for closes in by_symbol.values() for day in closes})
-    market: dict[str, float] = {}
+    market: dict[datetime, float] = {}
     for previous, day in zip(dates, dates[1:]):
         returns = [
             closes[day] / closes[previous] - 1
@@ -423,7 +408,7 @@ def _beta_scores(
         if returns:
             market[day] = sum(returns) / len(returns)
     rows: list[ScoreRow] = []
-    market_days = dates[-window_days:]
+    market_days = set(dates[-window_days:])
     for symbol in symbols:
         closes = by_symbol[symbol]
         paired = [

@@ -4,7 +4,7 @@
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, time, timezone
+from datetime import datetime
 
 from ai_studio.n08_blocks import (
     apply_stop,
@@ -15,6 +15,7 @@ from ai_studio.n08_blocks import (
     min_price_universe,
     if_else_score,
     if_else_condition,
+    allocate_target_weight,
     low_volatility_score,
     momentum_score,
     moving_average_cross,
@@ -24,7 +25,8 @@ from ai_studio.n08_blocks import (
     set_condition_operation,
     trend_condition,
 )
-from ai_studio.n01_frames import EventFrame, ScoreFrame, ConditionFrame, UniverseFrame, UniverseRow, WeightFrame
+from ai_studio.n01_frames import EventFrame, ScoreFrame, ConditionFrame, UniverseFrame, WeightFrame
+from ai_studio.n03_market_data import bars_until, session_date
 from ai_studio.n10_functions import get_function
 from ai_studio.n06_portfolio import (
     apply_cash_weight,
@@ -32,17 +34,13 @@ from ai_studio.n06_portfolio import (
     select_min_score,
     select_top_n,
     to_target_portfolio,
-    weight_by_score,
-    weight_equal,
 )
 from ai_studio.n05_signals import compare_threshold
-from ai_studio.n07_runtime import UniverseFrame as OrderUniverse
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 
 Handler = Callable[[Mapping[str, object], Mapping[str, object], object], dict[str, object]]
 
 _HANDLERS: dict[str, Handler] = {}
-_CLOSE = time(21, 0, tzinfo=timezone.utc)
 
 
 def register(function_id: str, handler: Handler) -> None:
@@ -72,7 +70,7 @@ def _compose(inputs: Mapping[str, object], params: Mapping[str, object], context
 def _exclude(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"universe": exclude_universe(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         min_listing_days=int(params["minListingDays"]),
         min_average_turnover=float(params["minAverageTurnover"]),
         exclude_halted=bool(params["excludeHalted"]),
@@ -84,7 +82,7 @@ def _exclude(inputs: Mapping[str, object], params: Mapping[str, object], context
 def _min_price(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"universe": min_price_universe(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         min_close=float(params["minClose"]),
     )}
 
@@ -92,7 +90,7 @@ def _min_price(inputs: Mapping[str, object], params: Mapping[str, object], conte
 def _momentum(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"score": momentum_score(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         lookback_months=int(params["lookbackMonths"]), skip_months=int(params["skipMonths"]),
     )}
 
@@ -100,7 +98,7 @@ def _momentum(inputs: Mapping[str, object], params: Mapping[str, object], contex
 def _trend(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"condition": trend_condition(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         method=str(params["method"]), fast_days=int(params["fastDays"]), slow_days=int(params["slowDays"]),
     )}
 
@@ -108,7 +106,7 @@ def _trend(inputs: Mapping[str, object], params: Mapping[str, object], context: 
 def _breakout(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"condition": breakout_condition(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         window_days=int(params["windowDays"]), buffer_pct=float(params["bufferPct"]),
     )}
 
@@ -116,7 +114,7 @@ def _breakout(inputs: Mapping[str, object], params: Mapping[str, object], contex
 def _cross(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     events = moving_average_cross(
-        _history(context), universe.symbols(),
+        _history(context), universe.symbols, _as_of(context),
         fast_days=int(params["fastDays"]), slow_days=int(params["slowDays"]),
     )
     return {"entry": events.of_kind("entry"), "exit": events.of_kind("exit")}
@@ -125,7 +123,7 @@ def _cross(inputs: Mapping[str, object], params: Mapping[str, object], context: 
 def _rsi(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"value": rsi_indicator(
-        _history(context), universe.symbols(), _as_of(context), period=int(params["period"]),
+        _history(context), universe.symbols, _as_of(context), period=int(params["period"]),
     )}
 
 
@@ -136,7 +134,7 @@ def _threshold(inputs: Mapping[str, object], params: Mapping[str, object], conte
 def _low_vol(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
     return {"score": low_volatility_score(
-        _history(context), universe.symbols(), _as_of(context),
+        _history(context), universe.symbols, _as_of(context),
         metric=str(params["metric"]), window_days=int(params["windowDays"]),
     )}
 
@@ -156,13 +154,7 @@ def _min_score(inputs: Mapping[str, object], params: Mapping[str, object], conte
 
 
 def _target_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    selection = inputs["selection"]
-    scheme = str(params["scheme"])
-    if scheme == "equal":
-        return {"weight": weight_equal(selection)}  # type: ignore[arg-type]
-    if scheme == "score":
-        return {"weight": weight_by_score(selection)}  # type: ignore[arg-type]
-    raise ValueError(f"지원하지 않는 배분 방식입니다: {scheme}")
+    return {"weight": allocate_target_weight(inputs["selection"], str(params["scheme"]))}  # type: ignore[arg-type]
 
 
 def _max_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
@@ -231,8 +223,9 @@ def _set_op(inputs: Mapping[str, object], params: Mapping[str, object], context:
     right = inputs["right"]
     operator = str(params["operator"])
     if isinstance(left, UniverseFrame) and isinstance(right, UniverseFrame):
-        symbols = set_operation(set(left.symbols()), set(right.symbols()), operator)
-        return {"result": UniverseFrame(left.as_of, tuple(UniverseRow(symbol) for symbol in symbols))}
+        if left.as_of != right.as_of:
+            raise ValueError("집합 연산의 두 유니버스는 기준 시각이 같아야 합니다.")
+        return {"result": UniverseFrame(left.as_of, set_operation(set(left.symbols), set(right.symbols), operator))}
     if isinstance(left, ConditionFrame) and isinstance(right, ConditionFrame):
         return {"result": set_condition_operation(left, right, operator)}
     raise ValueError("집합 연산은 유니버스 또는 조건 프레임만 받습니다.")
@@ -244,7 +237,7 @@ def _state(inputs: Mapping[str, object], params: Mapping[str, object], context: 
     if not isinstance(condition, ConditionFrame):
         raise ValueError("상태 전략의 조건은 조건 프레임이어야 합니다.")
     return {"result": evaluate_state(
-        "state", _order_universe(universe), condition.matches(), positions=_positions(context),
+        "state", universe, condition.matches(), positions=_positions(context),
     )}
 
 
@@ -265,20 +258,17 @@ def _events(strategy_id: str, inputs: Mapping[str, object], context: object, eli
     exits = _event_symbols(inputs["exit"], universe.as_of)
     entry_weight = 1 / len(entries) if entries else 1.0
     return evaluate_events(
-        strategy_id, _order_universe(universe), entries, exits, _positions(context),
+        strategy_id, universe, entries, exits, _positions(context),
         eligible=eligible, entry_weight=entry_weight,
     )
 
 
-def _event_symbols(value: object, as_of: str) -> set[str]:
+def _event_symbols(value: object, as_of: datetime) -> set[str]:
+    """평가일과 같은 거래일에 발생한 이벤트만."""
     if not isinstance(value, EventFrame):
         raise ValueError("이벤트 입력은 이벤트 프레임이어야 합니다.")
-    return {row.instrument_id for row in value.rows if row.as_of.date().isoformat() == as_of}
-
-
-def _order_universe(frame: UniverseFrame) -> OrderUniverse:
-    stamp = datetime.combine(datetime.strptime(frame.as_of, "%Y-%m-%d").date(), _CLOSE)
-    return OrderUniverse(stamp, frame.symbols())
+    day = session_date(as_of)
+    return {row.instrument_id for row in value.rows if row.as_of <= as_of and session_date(row.as_of) == day}
 
 
 def _universe(value: object) -> UniverseFrame:
@@ -291,8 +281,8 @@ def _history(context: object):
     return getattr(context, "history")
 
 
-def _as_of(context: object) -> str:
-    return str(getattr(context, "as_of"))
+def _as_of(context: object) -> datetime:
+    return getattr(context, "as_of")
 
 
 def _mapping(context: object, name: str) -> Mapping[str, float]:
@@ -309,7 +299,7 @@ def _last_prices(context: object, symbols: Sequence[str]) -> dict[str, float]:
     as_of = _as_of(context)
     prices: dict[str, float] = {}
     for symbol in symbols:
-        series = [bar for bar in history.get(symbol, ()) if bar.date <= as_of]
+        series = bars_until(history, symbol, as_of)
         if not series:
             raise ValueError(f"{symbol}: {as_of} 종가가 없습니다.")
         prices[symbol] = series[-1].close

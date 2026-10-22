@@ -5,8 +5,9 @@ from tempfile import TemporaryDirectory
 from ai_studio.n13_connect import can_connect, validate_graph
 from ai_studio.n09_backtest import run_backtest, trade_rows, write_trades_csv
 from ai_studio.n10_functions import FUNCTIONS, function_catalog, get_function
+from ai_studio.n01_frames import MarketBar, StrategyValidationError, UniverseFrame
 from ai_studio.n07_runtime import (
-    MarketBar, OrderIntent, PositionState, StrategyValidationError, UniverseFrame,
+    OrderIntent, PositionState,
     evaluate_events, evaluate_state, execution_open, fill_at_next_open, generate_orders,
     trade_notional,
 )
@@ -21,8 +22,8 @@ def universe(*symbols):
 
 
 def bars(symbol, closes, offset=0):
-    return [MarketBar(T + timedelta(days=i + offset), T + timedelta(days=i + offset),
-                      symbol, value, value) for i, value in enumerate(closes)]
+    return [MarketBar(symbol, T + timedelta(days=i + offset), value, value, value, value)
+            for i, value in enumerate(closes)]
 
 
 class ContractTests(unittest.TestCase):
@@ -98,9 +99,9 @@ class SignalTests(unittest.TestCase):
 
     def test_invalid_price_and_future_availability_rejected(self):
         with self.assertRaises(StrategyValidationError):
-            MarketBar(T, T, "A", 0, 1)
+            MarketBar("A", T, 0, 1, 1, 1)
         with self.assertRaisesRegex(StrategyValidationError, "공개시점"):
-            moving_average_cross_events([MarketBar(T, T - timedelta(days=1), "A", 1, 1)], 2, 3)
+            moving_average_cross_events([MarketBar("A", T, 1, 1, 1, 1, available_at=T - timedelta(days=1))], 2, 3)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -163,13 +164,12 @@ class LifecycleTests(unittest.TestCase):
     def test_signal_day_cannot_fill_same_day(self):
         order = OrderIntent("A", "BUY", 1, T)
         with self.assertRaisesRegex(StrategyValidationError, "신호 이후"):
-            fill_at_next_open([order], {"A": MarketBar(T, T, "A", 10, 10, open_at=T)}, {}, 100)
+            fill_at_next_open([order], {"A": MarketBar("A", T, 10, 10, 10, 10, open_at=T)}, {}, 100)
 
     def test_next_open_fee_slippage_position_and_history(self):
         order = OrderIntent("A", "BUY", 2, T, "event-1")
         next_open = T + timedelta(days=1) - timedelta(hours=6, minutes=30)
-        next_bar = MarketBar(T + timedelta(days=1), T + timedelta(days=1), "A", 10, 11,
-                             open_at=next_open)
+        next_bar = MarketBar("A", T + timedelta(days=1), 10, 11, 10, 11, open_at=next_open)
         fills, holdings, cash = fill_at_next_open([order], {"A": next_bar}, {}, 100,
                                                   fee_rate=.01, slippage_rate=.01)
         self.assertEqual(fills[0].signal_at, T)
@@ -185,8 +185,7 @@ class LifecycleTests(unittest.TestCase):
     def test_four_histories_separate_signal_from_trade(self):
         result = evaluate_events("s", universe("A"), {"A"}, set(), {}, entry_weight=1)
         open_at = T + timedelta(days=1) - timedelta(hours=6, minutes=30)
-        bar = MarketBar(T + timedelta(days=1), T + timedelta(days=1), "A", 10, 11,
-                        open_at=open_at)
+        bar = MarketBar("A", T + timedelta(days=1), 10, 11, 10, 11, open_at=open_at)
         output = run_backtest([result], {T: {"A": 10}}, {T: {"A": bar}}, initial_cash=100)
         self.assertEqual(len(output.signal_history), 1)
         self.assertEqual(len(output.trade_log), 1)
@@ -202,7 +201,7 @@ class LifecycleTests(unittest.TestCase):
 
     def test_notional_excludes_fee_and_csv_keeps_cash(self):
         next_open = T + timedelta(days=1) - timedelta(hours=6, minutes=30)
-        bought = MarketBar(T + timedelta(days=1), T + timedelta(days=1), "A", 10, 11, open_at=next_open)
+        bought = MarketBar("A", T + timedelta(days=1), 10, 11, 10, 11, open_at=next_open)
         buy_result = evaluate_events("s", universe("A"), {"A"}, set(), {}, entry_weight=1)
         bought_book = run_backtest([buy_result], {T: {"A": 10}}, {T: {"A": bought}},
                                    initial_cash=100, fee_rate=.01, slippage_rate=.01)
@@ -218,8 +217,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["buy_amount"], buy_amount)
 
         sell_at = next_open + timedelta(days=1)
-        sold = MarketBar(T + timedelta(days=2), T + timedelta(days=2), "A", 12, 13,
-                         open_at=sell_at)
+        sold = MarketBar("A", T + timedelta(days=2), 12, 13, 12, 13, open_at=sell_at)
         sells, _, cash = fill_at_next_open(
             [OrderIntent("A", "SELL", fill.quantity, next_open)],
             {"A": sold}, {"A": PositionState("A", fill.quantity, fill.price)},

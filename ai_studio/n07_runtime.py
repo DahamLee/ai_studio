@@ -9,53 +9,13 @@ from datetime import datetime
 from math import floor, isfinite
 from typing import Literal, Mapping, Sequence
 
+from ai_studio.n01_frames import MarketBar, StrategyValidationError, UniverseFrame, require_tz
 from ai_studio.n02_schema import ExecutionType
-
-
-class StrategyValidationError(ValueError):
-    pass
-
-
-def _time(value: datetime, field: str) -> None:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise StrategyValidationError(f"{field}: 타임존이 있는 시각이 필요합니다.")
 
 
 def _nonnegative(value: float, field: str) -> None:
     if not isfinite(value) or value < 0:
         raise StrategyValidationError(f"{field}: 0 이상의 유한한 값이 필요합니다.")
-
-
-@dataclass(frozen=True, slots=True)
-class UniverseFrame:
-    as_of: datetime
-    symbols: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        _time(self.as_of, "universe.as_of")
-        if len(set(self.symbols)) != len(self.symbols) or any(not s for s in self.symbols):
-            raise StrategyValidationError("universe: 종목이 중복되거나 비어 있습니다.")
-
-
-@dataclass(frozen=True, slots=True)
-class MarketBar:
-    timestamp: datetime
-    available_at: datetime
-    symbol: str
-    open: float
-    close: float
-    frequency: str = "1d"
-    open_at: datetime | None = None
-
-    def __post_init__(self) -> None:
-        _time(self.timestamp, "bar.timestamp")
-        _time(self.available_at, "bar.available_at")
-        if self.open_at is not None:
-            _time(self.open_at, "bar.open_at")
-            if self.open_at > self.timestamp:
-                raise StrategyValidationError(f"{self.symbol}: 봉의 시가가 종가 이후일 수 없습니다.")
-        if not self.symbol or not all(isfinite(p) and p > 0 for p in (self.open, self.close)):
-            raise StrategyValidationError(f"bar {self.symbol} {self.timestamp}: 가격이 유효해야 합니다.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +42,7 @@ class StrategyResult:
     diagnostics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _time(self.as_of, "result.as_of")
+        require_tz(self.as_of, "result.as_of")
         if self.as_of != self.universe.as_of:
             raise StrategyValidationError("result.as_of와 universe.as_of가 다릅니다.")
         if len(set(row.symbol for row in self.signals)) != len(self.signals):

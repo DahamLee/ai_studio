@@ -3,29 +3,33 @@
 실행 순서에 특정 전략은 없다. 노드에 적힌 구현체와 연결만 따른다.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from ai_studio.n13_connect import validate_graph
 from ai_studio.n10_functions import get_function
-from ai_studio.n03_market_data import DailyBar
+from ai_studio.n03_market_data import History
 from ai_studio.n11_registry import get_handler
 from ai_studio.n07_runtime import PositionState
 from ai_studio.n02_schema import FunctionSpec, StrategyGraph, StrategyNode
-from ai_studio.n01_frames import WeightFrame
+from ai_studio.n01_frames import WeightFrame, require_tz
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionContext:
     """블록 출력이 아닌 시세·보유 정보. 모든 구현체가 같은 컨텍스트를 본다."""
 
-    as_of: str
-    history: Mapping[str, Sequence[DailyBar]]
+    as_of: datetime
+    history: History
     entry_prices: Mapping[str, float] = field(default_factory=dict)
     peak_prices: Mapping[str, float] = field(default_factory=dict)
     actual_weights: WeightFrame | None = None
     rebalance_due: bool = False
     positions: Mapping[str, PositionState] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        require_tz(self.as_of, "context.as_of")
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,10 +3,10 @@
 실행: PYTHONPATH=. .venv/bin/python scripts/preview_blocks.py
 """
 
-from ai_studio.n08_blocks import history_from_bars, rebalance_weights
+from ai_studio.n08_blocks import rebalance_weights
+from ai_studio.n03_market_data import bars_until, history_from_bars, load_ohlc
 from ai_studio.n14_engine import ExecutionContext, execute
 from ai_studio.n01_frames import WeightFrame, WeightRow
-from ai_studio.n03_market_data import load_ohlc
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 from ai_studio.n12_strategies import momentum_top10
 
@@ -38,12 +38,12 @@ def _graph() -> StrategyGraph:
     )
 
 
-def _prices(history, as_of: str) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+def _prices(history, as_of) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     entries: dict[str, float] = {}
     lasts: dict[str, float] = {}
     peaks: dict[str, float] = {}
     for symbol, series in history.items():
-        bars = [bar for bar in series if bar.date <= as_of]
+        bars = bars_until(history, symbol, as_of)
         if len(bars) < 22:
             continue
         entries[symbol] = bars[-22].close
@@ -54,13 +54,13 @@ def _prices(history, as_of: str) -> tuple[dict[str, float], dict[str, float], di
 
 def main() -> None:
     history = history_from_bars(load_ohlc())
-    as_of = max(bar.date for rows in history.values() for bar in rows)
+    as_of = max(bar.timestamp for rows in history.values() for bar in rows)
     entries, lasts, peaks = _prices(history, as_of)
     result = execute(_graph(), ExecutionContext(as_of, history, entry_prices=entries, peak_prices=peaks))
 
     universe = result.port("universe", "universe")
     kept = result.port("filter", "universe")
-    removed = [symbol for symbol in universe.symbols() if symbol not in set(kept.symbols())]
+    removed = [symbol for symbol in universe.symbols if symbol not in set(kept.symbols)]
     ranked = result.port("pick", "selection")
     trend = result.port("trend", "condition")
     breakout = result.port("breakout", "condition")
@@ -73,8 +73,8 @@ def main() -> None:
     target = result.port("target", "portfolio")
 
     print(f"기준일 {as_of}")
-    print(f"universe.compose {len(universe.rows)}")
-    print(f"universe.exclude 상장 148일 이상, 거래정지 제외 → {len(kept.rows)}  제외 {len(removed)} {removed[:8]}")
+    print(f"universe.compose {len(universe.symbols)}")
+    print(f"universe.exclude 상장 148일 이상, 거래정지 제외 → {len(kept.symbols)}  제외 {len(removed)} {removed[:8]}")
     print("momentum.factor 6개월, 최근 1개월 제외, 상위 10")
     for row in ranked.rows:
         print(f"  {row.rank:2} {row.instrument_id:6} {row.score:+.2%}")
@@ -101,7 +101,7 @@ def main() -> None:
     last_cross = [
         event
         for event in (*result.port("cross", "entry").rows, *result.port("cross", "exit").rows)
-        if event.as_of.date().isoformat() == as_of
+        if event.as_of == as_of
     ]
     print(f"momentum.ma-cross 기준일 이벤트 {len(last_cross)}")
     for event in last_cross[:15]:

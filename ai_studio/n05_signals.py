@@ -7,9 +7,10 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from ai_studio.n01_frames import EventFrame, EventRow, IndicatorFrame, ConditionFrame, ConditionRow
+from ai_studio.n01_frames import (
+    ConditionFrame, ConditionRow, EventFrame, EventRow, IndicatorFrame, MarketBar, StrategyValidationError,
+)
 from ai_studio.n04_indicators import moving_average
-from ai_studio.n07_runtime import MarketBar, StrategyValidationError
 
 _OPERATORS = {
     "lt": lambda value, threshold: value < threshold,
@@ -59,8 +60,6 @@ def moving_average_cross_events(
     groups: dict[str, list[MarketBar]] = {}
     seen: set[tuple[str, datetime]] = set()
     for bar in bars:
-        if bar.available_at < bar.timestamp:
-            raise StrategyValidationError(f"{bar.symbol} {bar.timestamp}: 공개시점이 데이터 시점보다 빠릅니다.")
         key = (bar.symbol, bar.timestamp)
         if key in seen:
             raise StrategyValidationError(f"중복 시계열: {bar.symbol} {bar.timestamp}")

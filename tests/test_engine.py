@@ -2,18 +2,18 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from ai_studio.n08_blocks import history_from_bars
 from ai_studio.n14_engine import ExecutionContext, execute
 from ai_studio.n01_frames import TargetPortfolio, UniverseFrame, WeightFrame
-from ai_studio.n03_market_data import DATA_PATH, DailyBar, load_ohlc
+from ai_studio.n03_market_data import DATA_PATH, daily_bar, history_from_bars, load_ohlc, session_close as at
+from ai_studio.n01_frames import MarketBar
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 from ai_studio.n12_strategies import momentum_top10
 
 
-def closes(symbol: str, values: list[float]) -> list[DailyBar]:
+def closes(symbol: str, values: list[float]) -> list[MarketBar]:
     start = date(2026, 1, 1)
     return [
-        DailyBar((start + timedelta(days=index)).isoformat(), symbol, value, value, value, value, 1_000)
+        daily_bar(symbol, start + timedelta(days=index), value, value, value, value, 1_000)
         for index, value in enumerate(values)
     ]
 
@@ -39,14 +39,14 @@ def pipeline(scheme: str, top_n: int) -> StrategyGraph:
 class EngineTests(unittest.TestCase):
     def setUp(self):
         history = history_from_bars(closes("A", [100] * 21 + [150]) + closes("B", [100] * 21 + [110]))
-        self.context = ExecutionContext("2026-01-22", history)
+        self.context = ExecutionContext(at("2026-01-22"), history)
 
     def test_instance_outputs_are_role_frames(self):
         result = execute(pipeline("equal", 1), self.context)
         universe = result.port("universe", "universe")
         target = result.port("target", "portfolio")
         self.assertIsInstance(universe, UniverseFrame)
-        self.assertEqual(universe.symbols(), ("A", "B"))
+        self.assertEqual(universe.symbols, ("A", "B"))
         self.assertIsInstance(target, TargetPortfolio)
         self.assertEqual([row.instrument_id for row in target.positions], ["A"])
         self.assertAlmostEqual(target.positions[0].target_weight, 1)
@@ -101,14 +101,14 @@ class EngineTests(unittest.TestCase):
                 StrategyEdge("cross", "exit", "decision", "exit"),
             ),
         )
-        result = execute(graph, ExecutionContext("2026-01-05", history))
+        result = execute(graph, ExecutionContext(at("2026-01-05"), history))
         signal = result.port("decision", "result").signals[0]
         self.assertEqual(signal.action, "ENTER")
 
     @unittest.skipUnless(Path(DATA_PATH).exists(), "일봉 CSV가 없습니다.")
     def test_saved_ohlc_runs_the_momentum_instance(self):
         history = history_from_bars(load_ohlc())
-        as_of = max(bar.date for rows in history.values() for bar in rows)
+        as_of = max(bar.timestamp for rows in history.values() for bar in rows)
         result = execute(momentum_top10(), ExecutionContext(as_of, history))
         target = result.port("target", "portfolio")
         self.assertEqual(len(target.positions), 10)
