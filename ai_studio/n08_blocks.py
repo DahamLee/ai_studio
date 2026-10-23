@@ -37,8 +37,8 @@ TRADING_DAYS_PER_MONTH = 21
 
 
 def compose_universe(history: History, as_of: datetime) -> UniverseFrame:
-    """universe.compose. 적재된 종목 전체를 같은 유니버스 프레임으로 반환한다."""
-    symbols = tuple(sorted(symbol for symbol, rows in history.items() if rows))
+    """universe.compose. as_of까지 봉이 하나라도 공개된 종목. 아직 상장하지 않은 종목은 넣지 않는다."""
+    symbols = tuple(sorted(symbol for symbol in history if _upto(history, symbol, as_of)))
     return _universe(as_of, symbols)
 
 

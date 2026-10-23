@@ -25,7 +25,7 @@ from ai_studio.n08_blocks import (
     set_condition_operation,
     trend_condition,
 )
-from ai_studio.n01_frames import EventFrame, ScoreFrame, ConditionFrame, UniverseFrame, WeightFrame
+from ai_studio.n01_frames import EventFrame, ScoreFrame, ConditionFrame, TargetPortfolio, UniverseFrame, WeightFrame
 from ai_studio.n03_market_data import bars_until, session_date
 from ai_studio.n10_functions import get_function
 from ai_studio.n06_portfolio import (
@@ -233,12 +233,16 @@ def _set_op(inputs: Mapping[str, object], params: Mapping[str, object], context:
 
 def _state(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
-    condition = inputs["condition"]
-    if not isinstance(condition, ConditionFrame):
-        raise ValueError("상태 전략의 조건은 조건 프레임이어야 합니다.")
-    return {"result": evaluate_state(
-        "state", universe, condition.matches(), positions=_positions(context),
-    )}
+    portfolio = inputs["portfolio"]
+    if not isinstance(portfolio, TargetPortfolio):
+        raise ValueError("상태 전략의 입력은 목표 포트폴리오여야 합니다.")
+    targets = {row.instrument_id: row.target_weight for row in portfolio.positions}
+    return {"result": evaluate_state("state", universe, targets, positions=_positions(context))}
+
+
+def _execution(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    """실행 노드는 평가 시점마다 아무것도 계산하지 않는다. 주문과 체결은 n15의 실행기가 맡는다."""
+    return {}
 
 
 def _event(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
@@ -334,6 +338,7 @@ def register_builtin_handlers() -> None:
         ("strategy.state", _state),
         ("strategy.event", _event),
         ("strategy.hybrid", _hybrid),
+        ("execution.orders", _execution),
     )
     for function_id, handler in pairs:
         register(function_id, handler)

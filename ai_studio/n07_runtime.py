@@ -112,19 +112,21 @@ class Fill:
 
 
 def evaluate_state(
-    strategy_id: str, universe: UniverseFrame, conditions: Mapping[str, bool],
+    strategy_id: str, universe: UniverseFrame, targets: Mapping[str, float],
     *, scores: Mapping[str, float] | None = None,
     positions: Mapping[str, PositionState] | None = None,
 ) -> StrategyResult:
-    """False means target weight zero, including held names removed from the universe."""
-    if set(conditions) != set(universe.symbols) or any(type(v) is not bool for v in conditions.values()):
-        raise StrategyValidationError(f"{strategy_id}: 상태 조건은 유니버스의 각 종목에 bool 값이 필요합니다.")
-    selected = [s for s in universe.symbols if conditions[s]]
-    weight = 1 / len(selected) if selected else 0.0
+    """목표 비중을 그대로 판단으로 옮긴다. 목표가 없는 유니버스 종목과 유니버스에서 빠진 보유 종목은 0이다."""
+    outside = sorted(set(targets) - set(universe.symbols))
+    if outside:
+        raise StrategyValidationError(f"{strategy_id}: 유니버스 밖 종목에 목표 비중이 있습니다: {outside}")
+    for symbol, weight in targets.items():
+        if type(weight) not in (int, float):
+            raise StrategyValidationError(f"{strategy_id}.{symbol}: 목표 비중은 숫자여야 합니다.")
     signals = tuple(
-        AssetSignal(s, eligible=conditions[s], score=None if scores is None else scores.get(s),
-                    action="REBALANCE", desired_state="LONG" if conditions[s] else "FLAT",
-                    target_weight=weight if conditions[s] else 0.0)
+        AssetSignal(s, eligible=targets.get(s, 0.0) > 0, score=None if scores is None else scores.get(s),
+                    action="REBALANCE", desired_state="LONG" if targets.get(s, 0.0) > 0 else "FLAT",
+                    target_weight=float(targets.get(s, 0.0)))
         for s in universe.symbols
     ) + tuple(
         AssetSignal(s, eligible=False, action="REBALANCE", desired_state="FLAT",
@@ -191,10 +193,12 @@ def generate_orders(
     for row in result.signals:
         if row.action in ("HOLD", "NONE") or (row.event_id is not None and row.event_id in processed_event_ids):
             continue
+        current = positions.get(row.symbol, PositionState(row.symbol)).quantity
+        if current == 0 and pending_delta.get(row.symbol, 0) == 0 and (row.action == "EXIT" or row.target_weight == 0):
+            continue
         price = prices.get(row.symbol)
         if price is None or not isfinite(price) or price <= 0:
             raise StrategyValidationError(f"{row.symbol} {result.as_of}: 주문 기준가격이 없습니다.")
-        current = positions.get(row.symbol, PositionState(row.symbol)).quantity
         if row.action == "EXIT" and pending_delta.get(row.symbol, 0) > 0:
             raise StrategyValidationError(f"{row.symbol}: 청산 전에 미체결 매수 주문을 취소해야 합니다.")
         effective = current + pending_delta.get(row.symbol, 0)

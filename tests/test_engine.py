@@ -8,6 +8,10 @@ from ai_studio.n03_market_data import DATA_PATH, daily_bar, history_from_bars, l
 from ai_studio.n01_frames import MarketBar
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 from ai_studio.n12_strategies import momentum_top10
+from ai_studio.n13_connect import validate_strategy
+from ai_studio.n07_runtime import evaluate_state
+from ai_studio.n09_backtest import Ledger
+from ai_studio.n15_ohlc_backtest import RunSettings, run_graph_backtest
 
 
 def closes(symbol: str, values: list[float]) -> list[MarketBar]:
@@ -114,6 +118,69 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(target.positions), 10)
         self.assertAlmostEqual(target.cash_weight, 0.05)
         self.assertTrue(all(abs(row.target_weight - 0.095) < 1e-9 for row in target.positions))
+
+
+def momentum_strategy(*, drift: float = 0, rebalance: str = "monthly") -> StrategyGraph:
+    base = pipeline("equal", 1)
+    return StrategyGraph(
+        base.nodes + (
+            StrategyNode("decision", "strategy.state", {}),
+            StrategyNode("orders", "execution.orders", {"rebalanceFrequency": rebalance, "driftThresholdPct": drift}),
+        ),
+        base.edges + (
+            StrategyEdge("universe", "universe", "decision", "universe"),
+            StrategyEdge("target", "portfolio", "decision", "portfolio"),
+            StrategyEdge("decision", "result", "orders", "result"),
+        ),
+    )
+
+
+class StrategyRunTests(unittest.TestCase):
+    def setUp(self):
+        # A는 21일 동안 오르고, B는 그대로다. 1월 말과 2월 말에 평가한다.
+        self.history = history_from_bars(
+            closes("A", [100 + index for index in range(60)]) + closes("B", [100] * 60)
+        )
+
+    def test_complete_graph_needs_one_execution_node(self):
+        self.assertIn("실행 노드", validate_strategy(pipeline("equal", 1)).reason)
+        graph = momentum_strategy()
+        self.assertTrue(validate_strategy(graph).ok)
+        extra = StrategyGraph(graph.nodes + (StrategyNode("rsi", "indicator.rsi", {}),),
+                              graph.edges + (StrategyEdge("universe", "universe", "rsi", "universe"),))
+        self.assertEqual(validate_strategy(extra).warnings, ("rsi: 실행 노드에 닿지 않습니다.",))
+
+    def test_factor_graph_reaches_the_ledger(self):
+        result = run_graph_backtest(momentum_strategy(), self.history,
+                                    RunSettings(signal_frequency="daily", initial_capital=1_000))
+        self.assertGreater(len(result.trade_log), 0)
+        self.assertEqual({fill.symbol for fill in result.trade_log if fill.side == "BUY"}, {"A"})
+        self.assertTrue(all(fill.filled_at > fill.signal_at for fill in result.trade_log))
+        # 거래일마다 한 번씩 평가가 남는다.
+        self.assertEqual(len(result.portfolio_history), 60)
+        # 점수는 1월 22일부터 나오지만 월간 리밸런스라 1월 말에 처음 산다.
+        self.assertEqual([(fill.signal_at.date(), fill.side) for fill in result.trade_log],
+                         [(date(2026, 1, 31), "BUY")])
+
+    def test_drift_rebalances_between_dates(self):
+        quiet = run_graph_backtest(momentum_strategy(rebalance="semiannual"), self.history,
+                                   RunSettings(signal_frequency="daily", initial_capital=1_000))
+        drifted = run_graph_backtest(momentum_strategy(rebalance="semiannual", drift=0.1), self.history,
+                                     RunSettings(signal_frequency="daily", initial_capital=1_000))
+        self.assertGreater(len(drifted.trade_log), len(quiet.trade_log))
+
+    def test_unlisted_symbol_is_not_in_the_universe(self):
+        history = history_from_bars(closes("A", [100] * 5) + closes("LATE", [100] * 5)[3:])
+        context = ExecutionContext(at("2026-01-02"), history)
+        graph = StrategyGraph((StrategyNode("universe", "universe.compose", {}),), ())
+        self.assertEqual(execute(graph, context).port("universe", "universe").symbols, ("A",))
+
+    def test_order_without_next_bar_is_skipped(self):
+        result = evaluate_state("s", UniverseFrame(at("2026-01-02"), ("A",)), {"A": 1.0})
+        ledger = Ledger(100)
+        ledger.step(result, {"A": 10}, {})
+        self.assertEqual(ledger.result().trade_log, ())
+        self.assertEqual([order.symbol for order in ledger.result().skipped_orders], ["A"])
 
 
 if __name__ == "__main__":

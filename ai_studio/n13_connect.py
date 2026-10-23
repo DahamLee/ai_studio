@@ -17,6 +17,7 @@ from ai_studio.n02_schema import (
 class ConnectResult:
     ok: bool
     reason: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 def output_type(fn: FunctionSpec, port_key: str, resolved: PortType | None = None) -> PortType:
@@ -111,6 +112,29 @@ def validate_graph(graph: StrategyGraph) -> ConnectResult:
                     )
 
     return ConnectResult(True)
+
+
+def validate_strategy(graph: StrategyGraph) -> ConnectResult:
+    """백테스트·실행이 가능한 완성 그래프. 실행 노드가 정확히 하나이고 전략 판단이 연결돼야 한다.
+    실행 노드에 닿지 않는 블록은 계산만 하고 결과에 쓰이지 않으므로 경고한다."""
+    base = validate_graph(graph)
+    if not base.ok:
+        return base
+    executions = [node for node in graph.nodes if get_function(node.function_id).role == "EXECUTION"]
+    if len(executions) != 1:
+        return ConnectResult(False, f"실행 노드가 하나 있어야 합니다. 현재 {len(executions)}개")
+    parents: dict[str, set[str]] = {}
+    for edge in graph.edges:
+        parents.setdefault(edge.to_node, set()).add(edge.from_node)
+    reached: set[str] = set()
+    stack = [executions[0].id]
+    while stack:
+        node_id = stack.pop()
+        if node_id not in reached:
+            reached.add(node_id)
+            stack.extend(parents.get(node_id, ()))
+    unused = tuple(sorted(node.id for node in graph.nodes if node.id not in reached))
+    return ConnectResult(True, warnings=tuple(f"{node_id}: 실행 노드에 닿지 않습니다." for node_id in unused))
 
 
 def validate_params(fn: FunctionSpec, values: dict[str, object]) -> ConnectResult:

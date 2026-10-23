@@ -44,6 +44,7 @@ export const LAYERS: readonly Layer[] = [
       "portfolio.max-weight",
       "portfolio.cash",
       "portfolio.target",
+      "execution.orders",
     ],
   },
 ];

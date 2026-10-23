@@ -1,14 +1,16 @@
 from ai_studio.n13_connect import can_connect, validate_graph
 from ai_studio.n10_functions import FUNCTIONS, get_function
+from ai_studio.n11_registry import registered_ids
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 
 
 def main() -> None:
     ids = [fn.id for fn in FUNCTIONS]
-    if len(ids) != 26:
-        raise SystemExit(f"함수는 26개여야 합니다. 현재 {len(ids)}개")
     if len(set(ids)) != len(ids):
         raise SystemExit("함수 id가 중복되었습니다.")
+    missing = sorted(set(ids) - set(registered_ids()))
+    if missing:
+        raise SystemExit(f"계산 함수가 등록되지 않은 블록: {missing}")
 
     compose = get_function("universe.compose")
     exclude = get_function("universe.exclude")

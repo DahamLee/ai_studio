@@ -49,7 +49,7 @@ class ContractTests(unittest.TestCase):
             self.assertTrue(can_connect(source, fn.inputs[0]).ok)
             self.assertEqual(fn.outputs[0].type, "strategy_result")
 
-    def test_event_does_not_connect_to_state_condition(self):
+    def test_event_does_not_connect_to_state_portfolio(self):
         source = get_function("momentum.ma-cross").outputs[0]
         self.assertFalse(can_connect(source, get_function("strategy.state").inputs[1]).ok)
         self.assertTrue(can_connect(source, get_function("strategy.event").inputs[1]).ok)
@@ -106,7 +106,7 @@ class SignalTests(unittest.TestCase):
 
 class LifecycleTests(unittest.TestCase):
     def test_state_false_and_removed_holding_target_zero(self):
-        result = evaluate_state("s", universe("A"), {"A": False},
+        result = evaluate_state("s", universe("A"), {},
                                 positions={"B": PositionState("B", 2, 10)})
         self.assertEqual([(s.symbol, s.target_weight) for s in result.signals], [("A", 0), ("B", 0)])
 
@@ -114,7 +114,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(evaluate_state("s", universe(), {}).signals, ())
 
     def test_state_not_due_does_not_order(self):
-        result = evaluate_state("s", universe("A"), {"A": True})
+        result = evaluate_state("s", universe("A"), {"A": 1.0})
         self.assertEqual(generate_orders(result, {}, {"A": 10}, portfolio_value=100,
                                          cash=100, rebalance_due=False), ())
 
@@ -150,7 +150,7 @@ class LifecycleTests(unittest.TestCase):
                                          processed_event_ids=frozenset({first[0].event_id})), ())
 
     def test_whole_share_fee_budget_and_sell_limit(self):
-        result = evaluate_state("s", universe("A"), {"A": True})
+        result = evaluate_state("s", universe("A"), {"A": 1.0})
         order = generate_orders(result, {}, {"A": 30}, portfolio_value=100, cash=100,
                                 fee_rate=.1)
         self.assertEqual(order[0].quantity, 3)
@@ -178,9 +178,11 @@ class LifecycleTests(unittest.TestCase):
         self.assertAlmostEqual(holdings["A"].average_entry_price, 10.1)
         self.assertAlmostEqual(cash, 100 - 2 * 10.1 * 1.01)
 
-    def test_invalid_condition_schema_rejected(self):
-        with self.assertRaisesRegex(StrategyValidationError, "bool"):
+    def test_invalid_target_schema_rejected(self):
+        with self.assertRaisesRegex(StrategyValidationError, "숫자"):
             evaluate_state("s", universe("A"), {"A": None})
+        with self.assertRaisesRegex(StrategyValidationError, "유니버스 밖"):
+            evaluate_state("s", universe("A"), {"B": 0.5})
 
     def test_four_histories_separate_signal_from_trade(self):
         result = evaluate_events("s", universe("A"), {"A"}, set(), {}, entry_weight=1)

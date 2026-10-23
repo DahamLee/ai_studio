@@ -12,6 +12,7 @@ def momentum_rebalance(
     lookback_months: int = 1,
     skip_months: int = 0,
     cash_weight_pct: float = 20,
+    rebalance: str = "monthly",
 ) -> StrategyGraph:
     """기간과 상위 종목 수, 현금 비중만 다른 모멘텀 리밸런싱 그래프."""
     return StrategyGraph(
@@ -22,6 +23,8 @@ def momentum_rebalance(
             StrategyNode("weight", "allocation.target-weight", {"scheme": "equal"}),
             StrategyNode("cash", "portfolio.cash", {"cashWeightPct": cash_weight_pct}),
             StrategyNode("target", "portfolio.target", {}),
+            StrategyNode("decision", "strategy.state", {}),
+            StrategyNode("orders", "execution.orders", {"rebalanceFrequency": rebalance}),
         ),
         edges=(
             StrategyEdge("universe", "universe", "score", "universe"),
@@ -29,6 +32,9 @@ def momentum_rebalance(
             StrategyEdge("pick", "selection", "weight", "selection"),
             StrategyEdge("weight", "weight", "cash", "weight"),
             StrategyEdge("cash", "weight", "target", "weight"),
+            StrategyEdge("universe", "universe", "decision", "universe"),
+            StrategyEdge("target", "portfolio", "decision", "portfolio"),
+            StrategyEdge("decision", "result", "orders", "result"),
         ),
     )
 
@@ -45,6 +51,8 @@ def momentum_top10() -> StrategyGraph:
             StrategyNode("cap", "portfolio.max-weight", {"maxWeightPct": 15}),
             StrategyNode("cash", "portfolio.cash", {"cashWeightPct": 5}),
             StrategyNode("target", "portfolio.target", {}),
+            StrategyNode("decision", "strategy.state", {}),
+            StrategyNode("orders", "execution.orders", {"rebalanceFrequency": "monthly"}),
         ),
         edges=(
             StrategyEdge("universe", "universe", "filter", "universe"),
@@ -54,5 +62,8 @@ def momentum_top10() -> StrategyGraph:
             StrategyEdge("weight", "weight", "cap", "weight"),
             StrategyEdge("cap", "weight", "cash", "weight"),
             StrategyEdge("cash", "weight", "target", "weight"),
+            StrategyEdge("filter", "universe", "decision", "universe"),
+            StrategyEdge("target", "portfolio", "decision", "portfolio"),
+            StrategyEdge("decision", "result", "orders", "result"),
         ),
     )

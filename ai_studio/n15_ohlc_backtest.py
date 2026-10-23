@@ -1,78 +1,148 @@
-"""저장된 일봉으로 모멘텀 그래프를 날짜마다 실행하고, 다음 시가에 체결한다.
+"""완성된 전략 그래프를 거래일마다 실행하고, 실행 노드의 정책으로 주문·체결한다.
 
-종목 선정과 비중은 실행기가 그래프에서 계산한다. 이 모듈은 주문과 체결 원장만 맡는다.
+평가일마다 현재 보유를 컨텍스트로 넘겨 그래프를 실행하고, 실행 노드로 들어오는 전략 판단을
+원장(Ledger)에 넣는다. 특정 전략을 알지 못한다. 그래프가 판단을, 실행 노드가 매매 시점을 정한다.
 """
 
-from datetime import datetime
+from bisect import bisect_right
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime
 
-from ai_studio.n01_frames import MarketBar, UniverseFrame
-from ai_studio.n03_market_data import history_from_bars, load_ohlc
-from ai_studio.n09_backtest import BacktestResult, run_backtest
-from ai_studio.n14_engine import ExecutionContext, execute
-from ai_studio.n07_runtime import AssetSignal, StrategyResult
+from ai_studio.n01_frames import MarketBar
+from ai_studio.n02_schema import RUN_CONTEXT, StrategyGraph
+from ai_studio.n03_market_data import History, history_from_bars, load_ohlc, session_date
+from ai_studio.n07_runtime import StrategyResult
+from ai_studio.n09_backtest import BacktestResult, Ledger
+from ai_studio.n10_functions import get_function
 from ai_studio.n12_strategies import momentum_rebalance
+from ai_studio.n13_connect import validate_strategy
+from ai_studio.n14_engine import ExecutionContext, execute
+
+
+@dataclass(frozen=True, slots=True)
+class RunSettings:
+    """화면 하단 공통 실행 조건. 비율은 소수(0.001 = 0.1%)다. 기간이 None이면 데이터 전체."""
+
+    start: date | None = None
+    end: date | None = None
+    signal_frequency: str = "daily"
+    initial_capital: float = 10_000
+    fee_rate: float = 0.0
+    slippage_rate: float = 0.0
+
+    @classmethod
+    def from_params(cls, values: Mapping[str, object]) -> "RunSettings":
+        """RUN_CONTEXT 키(퍼센트 단위)로 만든다. 빠진 값은 RUN_CONTEXT 기본값이다."""
+        merged = {spec.key: spec.default for spec in RUN_CONTEXT} | dict(values)
+        return cls(
+            start=date.fromisoformat(str(merged["startDate"])) if merged.get("startDate") else None,
+            end=date.fromisoformat(str(merged["endDate"])) if merged.get("endDate") else None,
+            signal_frequency=str(merged["signalFrequency"]),
+            initial_capital=float(merged["initialCapital"]),  # type: ignore[arg-type]
+            fee_rate=float(merged["feeRate"]) / 100,  # type: ignore[arg-type]
+            slippage_rate=float(merged["slippageRate"]) / 100,  # type: ignore[arg-type]
+        )
+
+
+def period_key(day: date, frequency: str) -> tuple[int, ...]:
+    if frequency == "daily":
+        return (day.toordinal(),)
+    if frequency == "weekly":
+        year, week, _ = day.isocalendar()
+        return (year, week)
+    if frequency == "monthly":
+        return (day.year, day.month)
+    if frequency == "quarterly":
+        return (day.year, (day.month - 1) // 3)
+    if frequency == "semiannual":
+        return (day.year, (day.month - 1) // 6)
+    raise ValueError(f"지원하지 않는 주기입니다: {frequency}")
+
+
+def period_ends(days: Sequence[datetime], frequency: str) -> tuple[datetime, ...]:
+    """각 주기의 마지막 거래일. days는 시각순이어야 한다."""
+    last: dict[tuple[int, ...], datetime] = {}
+    for day in days:
+        last[period_key(session_date(day), frequency)] = day
+    return tuple(sorted(last.values()))
+
+
+def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSettings = RunSettings()) -> BacktestResult:
+    check = validate_strategy(graph)
+    if not check.ok:
+        raise ValueError(check.reason)
+    execution = next(node for node in graph.nodes if get_function(node.function_id).role == "EXECUTION")
+    spec = get_function(execution.function_id)
+    params = {param.key: param.default for param in spec.params} | dict(execution.params)
+    feed = next(edge for edge in graph.edges if edge.to_node == execution.id and edge.to_port == "result")
+
+    days = tuple(sorted({
+        bar.timestamp for series in history.values() for bar in series
+        if (settings.start is None or session_date(bar.timestamp) >= settings.start)
+        and (settings.end is None or session_date(bar.timestamp) <= settings.end)
+    }))
+    evaluations = period_ends(days, settings.signal_frequency)
+    due = set(period_ends(evaluations, str(params["rebalanceFrequency"]))) | set(evaluations[:1])
+    drift = float(params["driftThresholdPct"]) / 100 or None
+    ledger = Ledger(settings.initial_capital, fee_rate=settings.fee_rate,
+                    slippage_rate=settings.slippage_rate,
+                    allow_fractional_shares=bool(params["allowFractional"]))
+    stamps = {symbol: [bar.available_at for bar in series] for symbol, series in history.items()}
+
+    evaluation_days = set(evaluations)
+    marked: datetime | None = None
+    for day in days:
+        held = {symbol for symbol, position in ledger.holdings.items() if position.quantity}
+        if day not in evaluation_days or day == days[-1]:
+            # 평가일이 아니거나 다음 거래일이 없어 체결할 수 없으면 종가로 평가만 한다.
+            if day != marked:
+                ledger.mark(day, _closes(history, stamps, held, day))
+            continue
+        if day != marked:
+            ledger.mark(day, _closes(history, stamps, held, day))
+        outputs = execute(graph, ExecutionContext(day, history, positions=dict(ledger.holdings)))
+        result = outputs.port(feed.from_node, feed.from_port)
+        if not isinstance(result, StrategyResult):
+            raise ValueError("실행 노드에는 전략 판단이 들어와야 합니다.")
+        symbols = {row.symbol for row in result.signals} | held
+        prices = _closes(history, stamps, symbols, day)
+        next_bars: dict[str, MarketBar] = {}
+        for symbol in symbols:
+            series = history.get(symbol, ())
+            index = bisect_right(stamps.get(symbol, []), day)
+            if index < len(series) and series[index].open_at is not None:
+                next_bars[symbol] = series[index]
+        ledger.step(result, prices, next_bars, rebalance_due=day in due, drift_threshold=drift)
+        marked = ledger.result().portfolio_history[-1].as_of
+    return ledger.result()
+
+
+def _closes(history: History, stamps: Mapping[str, list[datetime]], symbols, day: datetime) -> dict[str, float]:
+    """day까지 공개된 마지막 종가. 그날 봉이 없으면(거래정지 등) 이전 종가다."""
+    prices: dict[str, float] = {}
+    for symbol in symbols:
+        index = bisect_right(stamps.get(symbol, []), day)
+        if index:
+            prices[symbol] = history[symbol][index - 1].close
+    return prices
 
 
 def run_momentum_topn(
     bars: tuple[MarketBar, ...] | None = None,
     *,
-    lookback: int = 20,
+    lookback_months: int = 1,
     top_n: int = 10,
-    step: int = 21,
     cash_weight: float = 0.2,
     initial_cash: float = 1_000_000,
+    rebalance: str = "monthly",
 ) -> BacktestResult:
-    rows = load_ohlc() if bars is None else bars
-    history = history_from_bars(rows)
-    counts: dict[datetime, int] = {}
-    for row in rows:
-        counts[row.timestamp] = counts.get(row.timestamp, 0) + 1
-    dates = [day for day, count in sorted(counts.items()) if count >= 450]
-    lookback_months = max(1, round(lookback / 21))
-    warmup = lookback_months * 21
-    if len(dates) <= warmup + 1:
-        raise ValueError("리밸런싱에 필요한 거래일이 부족합니다.")
+    """수익률 상위 top_n 종목을 동일 비중으로 담고 매월 말 리밸런싱한다.
+    체결은 다음 시가라서 가격이 오르면 현금이 모자랄 수 있어 현금 비중을 남긴다."""
     graph = momentum_rebalance(
-        top_n=top_n,
-        lookback_months=lookback_months,
-        skip_months=0,
-        cash_weight_pct=cash_weight * 100,
+        top_n=top_n, lookback_months=lookback_months, skip_months=0,
+        cash_weight_pct=cash_weight * 100, rebalance=rebalance,
     )
-    by_date = {
-        symbol: {bar.timestamp: bar for bar in series}
-        for symbol, series in history.items()
-    }
+    history = history_from_bars(load_ohlc() if bars is None else bars)
+    return run_graph_backtest(graph, history, RunSettings(signal_frequency=rebalance, initial_capital=initial_cash))
 
-    results: list[StrategyResult] = []
-    reference_prices: dict[datetime, dict[str, float]] = {}
-    next_bars: dict[datetime, dict[str, MarketBar]] = {}
-    for index in range(warmup, len(dates) - 1, step):
-        day = dates[index]
-        nxt = dates[index + 1]
-        executed = execute(graph, ExecutionContext(day, history))
-        target = executed.port("target", "portfolio")
-        score_of = {row.instrument_id: row.score for row in executed.port("score", "score").rows}
-        weight_of = {row.instrument_id: row.target_weight for row in target.positions}
-        tradable = [
-            symbol for symbol in executed.port("universe", "universe").symbols
-            if day in by_date[symbol] and nxt in by_date[symbol]
-        ]
-        signals = tuple(
-            AssetSignal(
-                symbol,
-                eligible=symbol in weight_of,
-                score=score_of.get(symbol),
-                action="REBALANCE",
-                desired_state="LONG" if symbol in weight_of else "FLAT",
-                target_weight=weight_of.get(symbol, 0.0),
-            )
-            for symbol in tradable
-        )
-        results.append(StrategyResult(
-            day, "momentum-top10", "STATE_REBALANCE",
-            UniverseFrame(day, tuple(tradable)), signals,
-            tuple((row.symbol, row.target_weight or 0.0) for row in signals),
-        ))
-        reference_prices[day] = {symbol: by_date[symbol][day].close for symbol in tradable}
-        next_bars[day] = {symbol: by_date[symbol][nxt] for symbol in tradable}
-    return run_backtest(results, reference_prices, next_bars, initial_cash=initial_cash)

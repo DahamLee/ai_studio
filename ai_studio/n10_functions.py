@@ -692,8 +692,12 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
     ),
     FunctionSpec(
         id="strategy.state", name="상태 평가 전략", category="strategy", category_label="전략 판단",
-        summary="조건의 현재 상태를 매 평가 시점에 목표 보유 상태로 바꾼다.",
-        inputs=(_UNIVERSE_IN, PortSpec("condition", "상태 조건", "condition", "참이면 선정, 거짓이면 목표 비중 0.", True)),
+        summary="목표 포트폴리오를 매 평가 시점의 목표 보유 상태로 바꾼다. 비중은 다시 계산하지 않는다.",
+        inputs=(
+            _UNIVERSE_IN,
+            PortSpec("portfolio", "목표 포트폴리오", "target_portfolio",
+                     "종목별 목표 비중. 없는 종목과 유니버스에서 빠진 보유 종목은 목표 0.", True),
+        ),
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="STATE_REBALANCE",
     ),
     FunctionSpec(
@@ -831,6 +835,32 @@ _NEW_FUNCTIONS: tuple[FunctionSpec, ...] = (
         ),
         params=(),
         role="TARGET",
+    ),
+    FunctionSpec(
+        id="execution.orders",
+        name="주문 실행",
+        category="execution",
+        category_label="실행",
+        summary="전략 판단을 주문 수량으로 바꿔 다음 시가에 체결한다. 언제 다시 맞출지를 여기서만 정한다.",
+        inputs=(
+            PortSpec("result", "전략 판단", "strategy_result", "주문으로 바꿀 전략 판단 결과.", True),
+        ),
+        outputs=(),
+        params=(
+            ParamSpec(
+                "rebalanceFrequency", "리밸런스", "enum",
+                "상태 평가형 전략이 비중을 다시 맞추는 주기. 각 주기의 마지막 평가일에 맞춘다. 이벤트형 전략은 이벤트가 날 때 주문한다.",
+                "monthly",
+                options=_opts(("weekly", "주간"), ("monthly", "월간"), ("quarterly", "분기"), ("semiannual", "반기")),
+            ),
+            ParamSpec(
+                "driftThresholdPct", "이탈 허용", "number",
+                "주기가 아니어도 실제 비중이 목표에서 이만큼 벗어나면 맞춘다. 0이면 쓰지 않는다.",
+                0, min=0, max=100, unit="%p",
+            ),
+            ParamSpec("allowFractional", "소수 주문", "boolean", "1주 미만 수량을 허용한다.", False),
+        ),
+        role="EXECUTION",
     ),
 )
 
