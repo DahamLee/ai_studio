@@ -230,3 +230,20 @@ def _find_port(ports: tuple[PortSpec, ...], key: str) -> PortSpec:
         if port.key == key:
             return port
     raise KeyError(f"포트를 찾을 수 없습니다: {key}")
+
+
+def check_editor_graph(data: dict) -> dict[str, object]:
+    """편집기 그래프 JSON을 검사한다. ok는 연결 규칙, complete는 실행 노드까지 닿는 완성 그래프 여부다."""
+    from ai_studio.n12_strategies import graph_from_dict
+
+    try:
+        graph = graph_from_dict(data)
+    except (KeyError, TypeError, ValueError) as error:
+        return {"ok": False, "reason": f"그래프 형식 오류: {error}", "complete": False, "warnings": []}
+    base = validate_graph(graph)
+    if not base.ok:
+        return {"ok": False, "reason": base.reason, "complete": False, "warnings": []}
+    full = validate_strategy(graph)
+    return {"ok": True, "reason": None, "complete": full.ok, "completeReason": full.reason,
+            "warnings": list(full.warnings)}
+

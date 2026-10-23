@@ -8,7 +8,7 @@
 from collections.abc import Callable, Mapping
 
 from ai_studio.n02_schema import (
-    PORT_TYPE_LABEL, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData,
+    PORT_TYPE_LABEL, RUN_CONTEXT, STAGES, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData, stage_of,
 )
 
 
@@ -445,6 +445,10 @@ def _port_dict(port: PortSpec) -> dict[str, object]:
         "required": port.required,
         "multiple": port.multiple,
         "minConnections": port.min_connections,
+        # 실제로 받는 타입. 비어 있지 않으면 type 대신 이것으로 연결을 판단한다.
+        "accepts": list(port.accepts),
+        "sameTypeAs": port.same_type_as,
+        "mirrors": port.mirrors,
     }
 
 
@@ -463,7 +467,10 @@ def _param_dict(param: ParamSpec) -> dict[str, object]:
 
 
 def function_catalog() -> dict[str, object]:
-    """팔레트가 그리는 함수 정의. 인스턴스 JSON은 캔버스에 놓을 때의 기본값이다."""
+    """편집기가 읽는 전체 정의. 단계 띠, 블록, 프리셋, 예제 전략, 공통 실행 조건.
+    인스턴스 JSON은 캔버스에 놓을 때의 기본값이다. 연결 검증은 Python(n13)이 최종 판단한다."""
+    from ai_studio.n12_strategies import example_catalog, preset_catalog  # n12는 n02만 보므로 순환하지 않는다.
+
     functions = []
     for fn in FUNCTIONS:
         params = {param.key: param.default for param in fn.params if param.default is not None}
@@ -473,6 +480,11 @@ def function_catalog() -> dict[str, object]:
             "category": fn.category,
             "categoryLabel": fn.category_label,
             "summary": fn.summary,
+            "role": fn.role,
+            "stage": stage_of(fn.role),
+            "version": fn.version,
+            "needsPrevious": fn.needs_previous,
+            "minimumHistory": fn.minimum_history(),
             "inputs": [_port_dict(port) for port in fn.inputs],
             "outputs": [_port_dict(port) for port in fn.outputs],
             "params": [_param_dict(param) for param in fn.params],
@@ -482,5 +494,10 @@ def function_catalog() -> dict[str, object]:
                 "params": params,
             },
         })
-    from ai_studio.n12_strategies import preset_catalog  # n12는 n02만 보므로 순환하지 않는다.
-    return {"functions": functions, "presets": preset_catalog()}
+    return {
+        "stages": [{"id": stage, "label": label, "roles": list(roles)} for stage, label, roles in STAGES],
+        "functions": functions,
+        "presets": preset_catalog(),
+        "examples": example_catalog(),
+        "runContext": [_param_dict(param) for param in RUN_CONTEXT],
+    }

@@ -28,6 +28,24 @@ EXECUTION_TYPE_METADATA: dict[str, dict[str, str]] = {
     "ANALYSIS_FUNCTION": {"ko_name": "분석·지원 기능", "behavior_type": "분석형"},
 }
 
+# 캔버스의 단계 띠. 블록은 role로 자기 단계가 정해진다. 팩터·시그널 갈래가 같은 띠를 공유한다.
+STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("universe", "유니버스", ("UNIVERSE",)),
+    ("indicator", "지표", ("INDICATOR",)),
+    ("judge", "점수·조건", ("SCORE", "CONDITION", "LOGIC")),
+    ("pick", "선정·이벤트", ("SELECTION", "EVENT")),
+    ("weight", "비중·제약·목표", ("WEIGHTING", "CONSTRAINT", "TARGET")),
+    ("decide", "판단·실행", ("STRATEGY", "EXECUTION")),
+)
+
+
+def stage_of(role: str) -> str:
+    for stage, _, roles in STAGES:
+        if role in roles:
+            return stage
+    raise ValueError(f"단계가 없는 역할입니다: {role}")
+
+
 PORT_TYPE_LABEL: dict[str, str] = {
     "universe": "종목 집합",
     "condition": "상태 조건",
@@ -99,7 +117,7 @@ class FunctionSpec:
     version: str = "1.0.0"
     role: Literal[
         "UNIVERSE", "INDICATOR", "CONDITION", "EVENT", "LOGIC", "SCORE",
-        "SELECTION", "WEIGHTING", "CONSTRAINT", "TARGET", "ALLOCATION", "STRATEGY", "EXECUTION",
+        "SELECTION", "WEIGHTING", "CONSTRAINT", "TARGET", "STRATEGY", "EXECUTION",
     ] = "CONDITION"
     strategy_execution_type: ExecutionType | None = None
     required_data: RequiredData = RequiredData()

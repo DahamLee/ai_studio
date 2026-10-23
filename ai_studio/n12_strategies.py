@@ -365,3 +365,24 @@ EXAMPLES: dict[str, tuple[str, object]] = {
     "golden-cross": ("골든크로스 / 데드크로스", example_golden_cross),
     "momentum-gated-cross": ("상위 N 중 골든크로스만 진입", example_momentum_gated_cross),
 }
+
+
+def graph_dict(graph: StrategyGraph) -> dict[str, object]:
+    return {
+        "nodes": [{"id": node.id, "function_id": node.function_id, "params": node.params} for node in graph.nodes],
+        "edges": [{"from": e.from_node, "fromPort": e.from_port, "to": e.to_node, "toPort": e.to_port} for e in graph.edges],
+    }
+
+
+def graph_from_dict(data: Mapping[str, object]) -> StrategyGraph:
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    return StrategyGraph(
+        tuple(StrategyNode(str(n["id"]), str(n["function_id"]), dict(n.get("params") or {})) for n in nodes),  # type: ignore[union-attr]
+        tuple(StrategyEdge(str(e["from"]), str(e["fromPort"]), str(e["to"]), str(e["toPort"])) for e in edges),  # type: ignore[index]
+    )
+
+
+def example_catalog() -> list[dict[str, object]]:
+    """편집기의 '예제 불러오기' 목록."""
+    return [{"key": key, "name": name, **graph_dict(build())} for key, (name, build) in EXAMPLES.items()]  # type: ignore[operator]
