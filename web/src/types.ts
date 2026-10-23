@@ -82,3 +82,22 @@ export type GraphCheck = {
   completeReason?: string | null;
   warnings: string[];
 };
+
+/** /api/backtest 응답. 비율은 소수다. */
+export type BacktestReport =
+  | { ok: false; reason: string | null }
+  | {
+      ok: true;
+      summary: {
+        start: string;
+        end: string;
+        finalValue: number;
+        cumulativeReturn: number;
+        maxDrawdown: number;
+        trades: number;
+        skipped: number;
+      };
+      equity: { date: string; value: number }[];
+      trades: { date: string; symbol: string; side: "BUY" | "SELL"; quantity: number; price: number }[];
+      warnings: string[];
+    };

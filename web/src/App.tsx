@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { acceptedTypes, resolveOutputType, stageIndex } from "./layers";
-import type { BlockFunction, Catalog, GraphCheck, GraphEdge, Port, Preset, Stage } from "./types";
+import { acceptedTypes, layoutColumns, resolveOutputType, stageIndex } from "./layers";
+import type { BacktestReport, BlockFunction, Catalog, GraphCheck, GraphEdge, Param, ParamValue, Port, Preset, Stage } from "./types";
 
 type CanvasNode = {
   instanceId: string;
   functionId: string;
-  params: Record<string, string | number | boolean>;
+  params: Record<string, ParamValue>;
   x: number;
   y: number;
 };
@@ -15,6 +15,7 @@ type PortRef = { node: string; port: string };
 const NODE_W = 196;
 const NODE_H = 88;
 const X0 = 24;
+const COL_GAP = 40;
 const BAND_MIN = 132;
 const BAND_HEAD = 30;
 
@@ -66,9 +67,10 @@ export function App() {
   const [wall, setWall] = useState<string | null>(null);
   const [check, setCheck] = useState<GraphCheck | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
-  const [capital, setCapital] = useState(10000);
-  const [feeRate, setFeeRate] = useState(0.1);
-  const [slippageRate, setSlippageRate] = useState(0.05);
+  const [runParams, setRunParams] = useState<Record<string, ParamValue>>({});
+  const [report, setReport] = useState<BacktestReport | null>(null);
+  const [reportFor, setReportFor] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const bandRef = useRef(BAND_MIN);
   const dragRef = useRef<{ id: string; dx: number; dy: number; blocked: boolean } | null>(null);
@@ -117,7 +119,11 @@ export function App() {
         if (!response.ok) throw new Error("함수 목록을 읽지 못했습니다.");
         return response.json() as Promise<Catalog>;
       })
-      .then((data) => setCatalog(data))
+      .then((data) => {
+        setCatalog(data);
+        // 날짜는 비워 두면 저장된 일봉 전체 기간이다.
+        setRunParams(Object.fromEntries(data.runContext.map((param) => [param.key, param.type === "date" ? "" : param.default ?? ""])));
+      })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "불러오기 실패"));
   }, []);
 
@@ -127,14 +133,16 @@ export function App() {
     if (compose) addFunction(compose.id);
   }, [catalog]);
 
+  const graphJson = useMemo(() => JSON.stringify({
+    nodes: nodes.map((node) => ({ id: node.instanceId, function_id: node.functionId, params: node.params })),
+    edges,
+  }), [nodes, edges]);  // 문자열이라 위치만 바뀐 경우 아래 effect는 다시 돌지 않는다.
+
   // 그래프가 바뀔 때마다 Python 검증기에 물어본다. 연결 규칙의 최종 판단은 Python 한 곳이다.
   useEffect(() => {
     if (!catalog) return;
     const timer = window.setTimeout(() => {
-      const body = JSON.stringify({
-        nodes: nodes.map((node) => ({ id: node.instanceId, function_id: node.functionId, params: node.params })),
-        edges,
-      });
+      const body = graphJson;
       fetch("/api/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body })
         .then((response) => {
           if (!response.ok && response.status !== 500) throw new Error();
@@ -144,7 +152,7 @@ export function App() {
         .catch(() => { setCheck(null); setCheckError("검증 서버가 없습니다. npm run dev에서만 검증합니다."); });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [catalog, nodes, edges]);
+  }, [catalog, graphJson]);
 
   const visible = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -194,6 +202,17 @@ export function App() {
     };
   }
 
+  /** 띠마다 한 줄, 모든 선이 왼쪽에서 오른쪽으로 가도록 다시 놓는다. */
+  function arrange(list: CanvasNode[], edgeList: GraphEdge[]) {
+    const band = new Map(list.map((node) => [node.instanceId, indexOf(node.functionId)]));
+    const columns = layoutColumns(list.map((node) => node.instanceId), (id) => band.get(id) ?? 0, edgeList);
+    return list.map((node) => ({
+      ...node,
+      x: X0 + (columns.get(node.instanceId) ?? 0) * (NODE_W + COL_GAP),
+      y: homeY(band.get(node.instanceId) ?? 0, bandRef.current),
+    }));
+  }
+
   function addFunction(functionId: string, x?: number, y?: number) {
     const fn = byId.get(functionId) ?? catalog?.functions.find((item) => item.id === functionId);
     if (!fn) return;
@@ -222,8 +241,9 @@ export function App() {
       ? preset.inputs.map((input) => ({ from: universe.instanceId, fromPort: "universe", to: name(input.node), toPort: input.port }))
       : [];
     if (!universe) setWall(`${preset.name}: 유니버스 노드를 먼저 놓으면 입력이 이어집니다.`);
-    setNodes(list);
-    setEdges((current) => [...current, ...inner, ...outer]);
+    const edgeList = [...edges, ...inner, ...outer];
+    setNodes(arrange(list, edgeList));
+    setEdges(edgeList);
     setSelectedId(name(preset.outputs[0]?.node ?? preset.nodes[0].id));
   }
 
@@ -237,10 +257,30 @@ export function App() {
       const node = placeAt(fn, list, inner.id);
       list.push({ ...node, params: { ...fn.instance.params, ...inner.params } });
     }
-    setNodes(list);
+    setNodes(arrange(list, example.edges));
     setEdges(example.edges);
     setPending(null);
     setSelectedId(null);
+  }
+
+  function setParam(instanceId: string, key: string, value: ParamValue) {
+    setNodes((current) => current.map((node) => (
+      node.instanceId === instanceId ? { ...node, params: { ...node.params, [key]: value } } : node
+    )));
+  }
+
+  function runBacktest() {
+    setRunning(true);
+    const graph = graphJson;
+    fetch("/api/backtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ graph: JSON.parse(graph), settings: runParams }),
+    })
+      .then((response) => response.json() as Promise<BacktestReport>)
+      .then((result) => { setReport(result); setReportFor(graph); })
+      .catch(() => { setReport({ ok: false, reason: "백테스트 서버가 없습니다. npm run dev에서만 실행합니다." }); setReportFor(graph); })
+      .finally(() => setRunning(false));
   }
 
   function removeNode(instanceId: string) {
@@ -350,6 +390,7 @@ export function App() {
           <h1>전략 캔버스</h1>
         </div>
         <p>팩터와 시그널 갈래가 같은 단계 띠를 씁니다. 출력 포트(파란 점)를 누른 뒤 입력 포트를 누르면 이어지고, 선을 누르면 끊깁니다.</p>
+        <button type="button" className="tool" onClick={() => setNodes((current) => arrange(current, edges))}>자동 정렬</button>
         <p className={`check ${status.tone}`} role="status" title={check?.warnings.join("\n")}>{status.text}</p>
         {wall ? <p className="wall-note" role="alert">{wall}</p> : null}
       </header>
@@ -358,9 +399,24 @@ export function App() {
         <aside className="lib" aria-label="노드 추가">
           <form className="run" onSubmit={(event) => event.preventDefault()}>
             <b>실행 조건</b>
-            <NumberField label="투자금" unit="USD" value={capital} step={1000} onChange={setCapital} />
-            <NumberField label="수수료율" unit="%" value={feeRate} step={0.01} onChange={setFeeRate} />
-            <NumberField label="슬리피지" unit="%" value={slippageRate} step={0.01} onChange={setSlippageRate} />
+            {(catalog?.runContext ?? []).map((param) => (
+              <ParamField
+                key={param.key}
+                param={param}
+                value={runParams[param.key] ?? ""}
+                placeholder={param.type === "date" ? "전체 기간" : undefined}
+                onChange={(value) => setRunParams((current) => ({ ...current, [param.key]: value }))}
+              />
+            ))}
+            <button
+              type="button"
+              className="run-go"
+              disabled={!check?.complete || running}
+              title={check?.complete ? "저장된 일봉으로 백테스트합니다." : "실행 가능한 그래프여야 합니다."}
+              onClick={runBacktest}
+            >
+              {running ? "백테스트 중…" : "백테스트 실행"}
+            </button>
             <label>
               <span>예제 불러오기</span>
               <select aria-label="예제 불러오기" value="" onChange={(event) => loadExample(event.target.value)}>
@@ -515,6 +571,7 @@ export function App() {
           ) : null}
         </div>
         <aside className="inspector">
+          {report ? <BacktestPanel report={report} stale={reportFor !== graphJson} onClose={() => setReport(null)} /> : null}
           {check?.warnings.length ? (
             <section className="warnings">
               <h3>경고</h3>
@@ -528,7 +585,21 @@ export function App() {
               <p className="muted">{stages[indexOf(selected.functionId)]?.label} 단계 · {selectedFn.role}</p>
               <p>{selectedFn.summary}</p>
               {selectedFn.minimumHistory > 1 ? <p className="muted">기본값으로 종목마다 최소 {selectedFn.minimumHistory}개 봉이 필요합니다.</p> : null}
-              <pre>{JSON.stringify({ id: selected.instanceId, function_id: selected.functionId, params: selected.params }, null, 2)}</pre>
+              {selectedFn.params.length ? (
+                <>
+                  <h3>파라미터</h3>
+                  <div className="params">
+                    {selectedFn.params.map((param) => (
+                      <ParamField
+                        key={param.key}
+                        param={param}
+                        value={selected.params[param.key] ?? param.default ?? ""}
+                        onChange={(value) => setParam(selected.instanceId, param.key, value)}
+                      />
+                    ))}
+                  </div>
+                </>
+              ) : null}
               <h3>입력</h3>
               <ul>
                 {selectedFn.inputs.map((port) => {
@@ -543,9 +614,13 @@ export function App() {
                 })}
                 {selectedFn.inputs.length === 0 ? <li className="muted">입력 없음</li> : null}
               </ul>
+              <details>
+                <summary>인스턴스 JSON</summary>
+                <pre>{JSON.stringify({ id: selected.instanceId, function_id: selected.functionId, params: selected.params }, null, 2)}</pre>
+              </details>
             </>
           ) : (
-            <p className="muted">노드를 누르면 인스턴스 JSON과 연결이 여기에 나옵니다.</p>
+            <p className="muted">노드를 누르면 파라미터와 연결이 여기에 나옵니다.</p>
           )}
         </aside>
       </div>
@@ -553,28 +628,119 @@ export function App() {
   );
 }
 
-function NumberField({ label, unit, value, step, onChange }: {
-  label: string;
-  unit: string;
-  value: number;
-  step: number;
-  onChange: (value: number) => void;
+function ParamField({ param, value, placeholder, onChange }: {
+  param: Param;
+  value: ParamValue;
+  placeholder?: string;
+  onChange: (value: ParamValue) => void;
 }) {
+  const title = param.description;
+  if (param.type === "boolean") {
+    return (
+      <label className="pf check-row" title={title}>
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        <span>{param.label}</span>
+      </label>
+    );
+  }
+  let control;
+  if (param.type === "enum") {
+    control = (
+      <select aria-label={param.label} value={String(value)} onChange={(event) => onChange(event.target.value)}>
+        {param.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+    );
+  } else if (param.type === "date") {
+    control = (
+      <input type="date" aria-label={param.label} value={String(value)} placeholder={placeholder}
+             onChange={(event) => onChange(event.target.value)} />
+    );
+  } else {
+    control = (
+      <input
+        type="number"
+        aria-label={param.label}
+        min={param.min ?? undefined}
+        max={param.max ?? undefined}
+        step={param.type === "integer" ? 1 : "any"}
+        value={value === "" ? "" : Number(value)}
+        onChange={(event) => {
+          if (event.target.value === "") return;
+          const number = Number(event.target.value);
+          onChange(param.type === "integer" ? Math.round(number) : number);
+        }}
+      />
+    );
+  }
   return (
-    <label>
-      <span>{label}</span>
+    <label className="pf" title={title}>
+      <span>{param.label}</span>
       <span className="field">
-        <input
-          type="number"
-          min={0}
-          step={step}
-          value={value}
-          aria-label={label}
-          onChange={(event) => onChange(event.target.value === "" ? 0 : Number(event.target.value))}
-        />
-        <small>{unit}</small>
+        {control}
+        {param.unit ? <small>{param.unit}</small> : null}
       </span>
+      {param.type === "date" && value === "" && placeholder ? <small className="muted">{placeholder}</small> : null}
     </label>
+  );
+}
+
+const percent = (value: number) => `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
+
+function BacktestPanel({ report, stale, onClose }: { report: BacktestReport; stale: boolean; onClose: () => void }) {
+  if (!report.ok) {
+    return (
+      <section className="result bad">
+        <div className="result-h"><h3>백테스트 실패</h3><button type="button" aria-label="결과 닫기" onClick={onClose}>×</button></div>
+        <p>{report.reason}</p>
+      </section>
+    );
+  }
+  const { summary, equity, trades } = report;
+  const values = equity.map((point) => point.value);
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const W = 248;
+  const H = 72;
+  const line = values.map((value, index) => {
+    const x = values.length > 1 ? (index * W) / (values.length - 1) : 0;
+    const y = high === low ? H / 2 : H - ((value - low) / (high - low)) * H;
+    return `${index ? "L" : "M"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <section className="result">
+      <div className="result-h">
+        <h3>백테스트 결과</h3>
+        <button type="button" aria-label="결과 닫기" onClick={onClose}>×</button>
+      </div>
+      {stale ? <p className="muted">그래프가 바뀌었습니다. 다시 실행하면 갱신됩니다.</p> : null}
+      <p className="muted">{summary.start} ~ {summary.end}</p>
+      <dl>
+        <dt>누적 수익률</dt><dd className={summary.cumulativeReturn >= 0 ? "up" : "down"}>{percent(summary.cumulativeReturn)}</dd>
+        <dt>최대 낙폭</dt><dd>{percent(summary.maxDrawdown)}</dd>
+        <dt>최종 평가액</dt><dd>{summary.finalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} USD</dd>
+        <dt>체결 / 미체결</dt><dd>{summary.trades} / {summary.skipped}</dd>
+      </dl>
+      <svg className="equity" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="평가액 추이">
+        <path d={line} />
+      </svg>
+      {trades.length ? (
+        <details>
+          <summary>최근 체결 {trades.length}건</summary>
+          <table>
+            <tbody>
+              {[...trades].reverse().map((trade, index) => (
+                <tr key={index}>
+                  <td>{trade.date.slice(5)}</td>
+                  <td>{trade.symbol}</td>
+                  <td className={trade.side === "BUY" ? "up" : "down"}>{trade.side === "BUY" ? "매수" : "매도"}</td>
+                  <td>{trade.quantity}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      ) : null}
+    </section>
   );
 }
 

@@ -28,3 +28,30 @@ export function resolveOutputType(
   const source = fnOf(edge.from)?.outputs.find((item) => item.key === edge.fromPort);
   return source ? resolveOutputType(edge.from, source, edges, fnOf, seen) : null;
 }
+
+/** 띠마다 한 줄로 놓되, 모든 선이 왼쪽에서 오른쪽으로 가도록 노드의 열을 정한다.
+ * 열 = max(앞 노드 열 + 1, 같은 띠에서 이미 쓴 열 + 1). 순환이 있으면 남은 노드를 끝에 붙인다. */
+export function layoutColumns(
+  ids: string[],
+  bandOf: (id: string) => number,
+  edges: GraphEdge[],
+): Map<string, number> {
+  const incoming = new Map(ids.map((id) => [id, [] as string[]]));
+  for (const edge of edges) {
+    if (incoming.has(edge.to) && incoming.has(edge.from)) incoming.get(edge.to)!.push(edge.from);
+  }
+  const columns = new Map<string, number>();
+  const lastInBand = new Map<number, number>();
+  const remaining = [...ids];
+  while (remaining.length) {
+    let index = remaining.findIndex((id) => incoming.get(id)!.every((from) => columns.has(from)));
+    if (index === -1) index = 0;
+    const [id] = remaining.splice(index, 1);
+    const band = bandOf(id);
+    const after = Math.max(-1, ...incoming.get(id)!.map((from) => columns.get(from) ?? -1));
+    const column = Math.max(after + 1, (lastInBand.get(band) ?? -1) + 1);
+    columns.set(id, column);
+    lastInBand.set(band, column);
+  }
+  return columns;
+}

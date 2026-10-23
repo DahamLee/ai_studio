@@ -83,7 +83,7 @@ python -m unittest discover -s tests -v       # 저장된 일봉이 있으면 �
 PYTHONPATH=. .venv/bin/python scripts/run_momentum_backtest.py
 PYTHONPATH=. .venv/bin/python scripts/preview_blocks.py
 
-cd web && npm install && npm run dev          # 편집기. /api/validate가 Python 검증기를 부른다
+cd web && npm install && npm run dev          # 편집기. /api/validate·/api/backtest가 Python을 부른다
 ```
 
 ## 백테스트 적용 전 점검

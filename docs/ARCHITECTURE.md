@@ -23,6 +23,7 @@ ai-studio/
 ```
 [편집기 web/] ──catalog.json── n10.function_catalog()   (단계, 블록, 프리셋, 예제, 실행 조건)
       │        ──/api/validate── n17 → n13.validate_strategy
+      │        ──/api/backtest── n17 backtest → n15.run_graph_backtest(저장된 일봉)
       ▼  StrategyGraph(nodes, edges)
 n15.run_graph_backtest(graph, history, RunSettings)
       │  거래일마다
@@ -60,7 +61,7 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n14_engine` | 그래프 실행기 | `ExecutionContext`, `execute`(직전 거래일 상류 재실행, 빈 결과 경고), `execution_order` |
 | `n15_ohlc_backtest` | 그래프 백테스트 | `RunSettings`, `period_ends`, `run_graph_backtest`, `run_momentum_topn` |
 | `n16_self_check` | 정합성 점검 | 카탈로그=레지스트리, 프리셋·예제 유효성, 핵심 연결 규칙 |
-| `n17_editor_api` | 편집기 검증 진입점 | 표준입력 그래프 JSON → 검증 결과 JSON |
+| `n17_editor_api` | 편집기 진입점 | 표준입력 그래프 JSON → 검증 결과 JSON, `backtest` 인자면 백테스트 요약(수익률·낙폭·평가액 추이·최근 체결) |
 
 ### 3.1 블록 (34개)
 
@@ -90,6 +91,9 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 - 카탈로그의 `stages`로 띠 6개를 만들고, 블록은 `stage`(역할에서 파생) 띠 안에서만 움직인다.
 - 선은 상태로 들고 있다. 블록을 놓으면 맞는 앞 노드와 한 번 이어 주고, 이후에는 출력 포트 → 입력 포트 클릭으로 잇고 선 클릭으로 끊는다.
 - 프리셋 추가, 예제 불러오기, 개발 서버 `/api/validate`를 통한 Python 검증(연결 오류 / 완성 전 / 실행 가능 + 경고).
+- 자동 정렬: 띠마다 한 줄로 놓고, 노드 열을 `max(앞 노드 열 + 1, 같은 띠의 앞 열 + 1)`로 정해 모든 선이 왼쪽에서 오른쪽으로 간다. 예제·프리셋을 놓을 때와 상단 버튼에서 쓴다.
+- 파라미터 편집: 오른쪽 패널에서 선택한 노드의 파라미터를 타입(number·integer·enum·boolean·date)에 맞는 입력으로 바꾼다. 왼쪽 실행 조건도 카탈로그의 `runContext`로 그린다(날짜를 비우면 저장된 일봉 전체).
+- 백테스트 실행: 실행 가능한 그래프일 때만 켜지고 `/api/backtest`로 돌린 결과를 오른쪽 패널에 보인다. 실행 뒤 그래프를 바꾸면 결과가 이전 그래프 기준임을 표시한다.
 
 ## 4. 설계 원칙
 
@@ -135,8 +139,9 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 - 재무 데이터(가치·퀄리티), 시가총액, 업종 데이터 연결.
 - 실제 지수 시세. 지금 시장 범위 지표는 적재 종목의 동일가중 합성 지수다.
 - 휴장일 달력, 기업행동(분할·배당), 부분체결, 세금.
-- `pyproject.toml`의 의존성·빌드 설정, CSV 커밋 여부(#18·19).
-- 편집기의 파라미터 편집, 노드 자동 배치(예제를 불러오면 선이 뒤로 돌아가는 배치가 있다), 백테스트 실행 버튼.
+- `pyproject.toml`에 선택 의존성(시세 수집용 pandas·requests·yfinance, 노트북용 ipykernel)과 빌드 설정이 없다. 지금 `.venv`는 손으로 만든 상태라 다른 환경에서 재현되지 않는다.
+- 일봉 CSV(`data/sp500_ohlc_1y.csv`)는 커밋돼 있다. 데이터를 늘리면 저장소 밖으로 뺄지 정해야 한다.
+- 편집기: 백테스트는 개발 서버(`npm run dev`)에서만 돈다. 정적 빌드에는 API가 없다. 실행마다 CSV를 다시 읽어 약 3초 걸린다.
 - `event.transition`은 직전 거래일 판단에 현재 보유를 그대로 쓴다. 보유에 따라 달라지는 조건(버퍼 선정 등)을 전이에 넣으면 근사가 된다.
 
 ## 6. 목표 구조
