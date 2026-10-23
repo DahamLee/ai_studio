@@ -11,6 +11,7 @@ from math import sqrt
 
 from ai_studio.n01_frames import (
     EventFrame,
+    EventRow,
     MarketBar,
     IndicatorFrame,
     IndicatorRow,
@@ -24,7 +25,7 @@ from ai_studio.n01_frames import (
     WeightRow,
 )
 from ai_studio.n03_market_data import History, bars_until, session_date
-from ai_studio.n04_indicators import moving_average, rsi, window_high
+from ai_studio.n04_indicators import daily_returns, moving_average, rsi, stdev, total_return, window_high
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
 from ai_studio.n05_signals import (
     breaks_prior_high,
@@ -429,3 +430,167 @@ def _beta_scores(
         beta = covariance / variance
         rows.append(ScoreRow(symbol, -beta, raw_value=beta))
     return ScoreFrame(tuple(rows))
+
+
+# ── 원자 지표 블록 ─────────────────────────────────────────────
+# 모든 지표는 판단 없이 숫자만 낸다. scope="market"이면 동일가중 시장 지수 한 줄(MARKET)을 낸다.
+
+MARKET_ID = "MARKET"
+_MARKET_CACHE: list[tuple[object, tuple[MarketBar, ...]]] = []
+
+
+def market_series(history: History) -> tuple[MarketBar, ...]:
+    """적재된 모든 종목의 일간 수익률을 같은 비중으로 평균해 100에서 이어 붙인 지수.
+    t일 값은 t-1일과 t일 종가만 쓰므로 미래 데이터를 보지 않는다. 지수 데이터가 생기면 그것으로 바꾼다."""
+    for source, series in _MARKET_CACHE:
+        if source is history:
+            return series
+    closes: dict[datetime, dict[str, float]] = {}
+    for symbol, bars in history.items():
+        for bar in bars:
+            closes.setdefault(bar.timestamp, {})[symbol] = bar.close
+    level = 100.0
+    previous: dict[str, float] | None = None
+    output: list[MarketBar] = []
+    for stamp in sorted(closes):
+        today = closes[stamp]
+        if previous is not None:
+            moves = [today[s] / previous[s] - 1 for s in today if s in previous]
+            if moves:
+                level *= 1 + sum(moves) / len(moves)
+        output.append(MarketBar(MARKET_ID, stamp, level, level, level, level))
+        previous = today
+    series = tuple(output)
+    _MARKET_CACHE[:] = [(history, series)] + _MARKET_CACHE[:3]
+    return series
+
+
+def _scoped(history: History, symbols: Sequence[str], scope: str) -> tuple[History, Sequence[str]]:
+    if scope == "symbol":
+        return history, symbols
+    if scope == "market":
+        return {MARKET_ID: market_series(history)}, (MARKET_ID,)
+    raise ValueError(f"지원하지 않는 범위입니다: {scope}")
+
+
+def _indicator(history: History, symbols: Sequence[str], as_of: datetime, scope: str,
+               minimum: int, compute) -> IndicatorFrame:
+    source, ids = _scoped(history, symbols, scope)
+    rows: list[IndicatorRow] = []
+    for symbol in ids:
+        series = _upto(source, symbol, as_of)
+        if len(series) >= minimum:
+            rows.append(IndicatorRow(symbol, compute(series)))
+    return IndicatorFrame(tuple(rows))
+
+
+def return_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                     lookback_days: int = 252, skip_days: int = 0, scope: str = "symbol") -> IndicatorFrame:
+    """indicator.return. 최근 skip_days를 뺀 lookback_days 수익률."""
+    if lookback_days < 1 or skip_days < 0:
+        raise ValueError("수익률 기간은 1일 이상, 제외 기간은 0일 이상이어야 합니다.")
+    return _indicator(history, symbols, as_of, scope, lookback_days + skip_days + 1,
+                      lambda s: total_return([bar.close for bar in s], lookback_days, skip_days))
+
+
+def moving_average_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                             window_days: int = 20, scope: str = "symbol") -> IndicatorFrame:
+    """indicator.moving-average. 종가 단순이동평균."""
+    if window_days < 1:
+        raise ValueError("이동평균 기간은 1일 이상이어야 합니다.")
+    return _indicator(history, symbols, as_of, scope, window_days,
+                      lambda s: moving_average([bar.close for bar in s], window_days))
+
+
+def price_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                    field: str = "close", scope: str = "symbol") -> IndicatorFrame:
+    """indicator.price. as_of 시점 마지막 봉의 가격."""
+    if field not in ("open", "high", "low", "close"):
+        raise ValueError(f"지원하지 않는 가격입니다: {field}")
+    return _indicator(history, symbols, as_of, scope, 1, lambda s: getattr(s[-1], field))
+
+
+def high_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                   window_days: int = 252, scope: str = "symbol") -> IndicatorFrame:
+    """indicator.high. 오늘을 뺀 직전 window_days 고가의 최고치. 오늘 종가와 비교하면 돌파가 된다."""
+    if window_days < 1:
+        raise ValueError("고점 기간은 1일 이상이어야 합니다.")
+    return _indicator(history, symbols, as_of, scope, window_days + 1,
+                      lambda s: window_high([bar.high for bar in s[:-1]], window_days))
+
+
+def volatility_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                         window_days: int = 252, metric: str = "stdev", scope: str = "symbol") -> IndicatorFrame:
+    """indicator.volatility. stdev는 일간 수익률 표준편차, beta는 동일가중 시장 대비 베타."""
+    if window_days < 2:
+        raise ValueError("변동성 기간은 2일 이상이어야 합니다.")
+    if metric == "stdev":
+        return _indicator(history, symbols, as_of, scope, window_days + 1,
+                          lambda s: stdev(daily_returns([bar.close for bar in s], window_days)))
+    if metric == "beta":
+        if scope == "market":
+            return IndicatorFrame((IndicatorRow(MARKET_ID, 1.0),))
+        frame = _beta_scores(history, symbols, as_of, window_days)
+        return IndicatorFrame(tuple(IndicatorRow(row.instrument_id, row.raw_value) for row in frame.rows))
+    raise ValueError(f"지원하지 않는 변동성 지표입니다: {metric}")
+
+
+def rsi_value_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                        period: int = 14, scope: str = "symbol") -> IndicatorFrame:
+    """indicator.rsi. scope를 받는 RSI."""
+    return _indicator(history, symbols, as_of, scope, period + 1,
+                      lambda s: rsi([bar.close for bar in s], period))
+
+
+def filter_universe(universe: UniverseFrame, condition: ConditionFrame) -> UniverseFrame:
+    """universe.filter. 조건이 참인 종목만 남긴다. 시장 한 줄 조건이면 전체를 남기거나 비운다."""
+    flags = condition.matches()
+    if list(flags) == [MARKET_ID]:
+        return universe if flags[MARKET_ID] else UniverseFrame(universe.as_of, ())
+    return UniverseFrame(universe.as_of, tuple(s for s in universe.symbols if flags.get(s, False)))
+
+
+# ── 보유 기반 청산 이벤트 ──────────────────────────────────────
+
+
+def stop_exit_events(history: History, positions: Mapping[str, object], as_of: datetime, *,
+                     stop_loss_pct: float = 10, take_profit_pct: float = 0, trailing: bool = False) -> EventFrame:
+    """event.stop. 보유 종목의 종가가 평균진입가(또는 진입 후 고점) 대비 손절선 이하이거나
+    익절선 이상이면 청산 이벤트. 비율 0은 그 규칙을 쓰지 않는다."""
+    if stop_loss_pct < 0 or take_profit_pct < 0:
+        raise ValueError("손절·익절 비율은 0 이상이어야 합니다.")
+    rows: list[EventRow] = []
+    for symbol, position in sorted(positions.items()):
+        if not getattr(position, "quantity", 0):
+            continue
+        series = _upto(history, symbol, as_of)
+        if not series:
+            continue
+        last = series[-1].close
+        entry = position.average_entry_price
+        opened = position.opened_at
+        if trailing:
+            held = [bar.high for bar in series if opened is None or bar.timestamp >= opened]
+            base = max(held + [entry])
+        else:
+            base = entry
+        stopped = stop_loss_pct > 0 and last <= base * (1 - stop_loss_pct / 100)
+        profited = take_profit_pct > 0 and last >= entry * (1 + take_profit_pct / 100)
+        if stopped or profited:
+            rows.append(EventRow(symbol, as_of, "exit"))
+    return EventFrame(tuple(rows))
+
+
+def holding_period_exit_events(history: History, positions: Mapping[str, object], as_of: datetime, *,
+                               max_days: int = 20) -> EventFrame:
+    """event.holding-period. 진입 후 거래일 수가 max_days 이상이면 청산 이벤트."""
+    if max_days < 1:
+        raise ValueError("보유 기간은 1일 이상이어야 합니다.")
+    rows: list[EventRow] = []
+    for symbol, position in sorted(positions.items()):
+        if not getattr(position, "quantity", 0) or position.opened_at is None:
+            continue
+        held = [bar for bar in _upto(history, symbol, as_of) if bar.timestamp >= position.opened_at]
+        if len(held) >= max_days:
+            rows.append(EventRow(symbol, as_of, "exit"))
+    return EventFrame(tuple(rows))

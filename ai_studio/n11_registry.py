@@ -7,6 +7,15 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
 from ai_studio.n08_blocks import (
+    filter_universe,
+    high_indicator,
+    holding_period_exit_events,
+    moving_average_indicator,
+    price_indicator,
+    return_indicator,
+    rsi_value_indicator,
+    stop_exit_events,
+    volatility_indicator,
     apply_stop,
     breakout_condition,
     combine_conditions,
@@ -25,17 +34,23 @@ from ai_studio.n08_blocks import (
     set_condition_operation,
     trend_condition,
 )
-from ai_studio.n01_frames import EventFrame, ScoreFrame, ConditionFrame, TargetPortfolio, UniverseFrame, WeightFrame
+from ai_studio.n01_frames import EventFrame, IndicatorFrame, ScoreFrame, SelectionFrame, ConditionFrame, TargetPortfolio, UniverseFrame, WeightFrame
 from ai_studio.n03_market_data import bars_until, session_date
 from ai_studio.n10_functions import get_function
 from ai_studio.n06_portfolio import (
     apply_cash_weight,
     cap_max_weight,
+    combine_scores,
+    scale_when_false,
+    score_from_indicator,
+    select_matched,
+    select_top_n_with_buffer,
+    weight_by_indicator,
     select_min_score,
     select_top_n,
     to_target_portfolio,
 )
-from ai_studio.n05_signals import compare_threshold
+from ai_studio.n05_signals import compare_indicators, compare_threshold, negate, transition_events
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 
 Handler = Callable[[Mapping[str, object], Mapping[str, object], object], dict[str, object]]
@@ -122,9 +137,89 @@ def _cross(inputs: Mapping[str, object], params: Mapping[str, object], context: 
 
 def _rsi(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
     universe = _universe(inputs["universe"])
-    return {"value": rsi_indicator(
-        _history(context), universe.symbols, _as_of(context), period=int(params["period"]),
+    return {"value": rsi_value_indicator(
+        _history(context), universe.symbols, _as_of(context),
+        period=int(params["period"]), scope=str(params["scope"]),
     )}
+
+
+def _indicator(compute, **names: tuple[str, Callable[[object], object]]) -> Handler:
+    """파라미터 키(camelCase)를 함수 인자로 옮기는 지표 핸들러. names는 {인자: (키, 형변환)}."""
+    def handler(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+        universe = _universe(inputs["universe"])
+        kwargs = {arg: cast(params[key]) for arg, (key, cast) in names.items()}
+        return {"value": compute(_history(context), universe.symbols, _as_of(context),
+                                 scope=str(params["scope"]), **kwargs)}
+    return handler
+
+
+def _score(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    value = _expect(inputs, "value", IndicatorFrame)
+    return {"score": score_from_indicator(value, str(params["direction"]), str(params["method"]))}
+
+
+def _score_combine(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"score": combine_scores(_expect(inputs, "left", ScoreFrame), _expect(inputs, "right", ScoreFrame),
+                                    float(params["leftWeightPct"]) / 100)}
+
+
+def _compare(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"condition": compare_indicators(
+        _expect(inputs, "left", IndicatorFrame), _expect(inputs, "right", IndicatorFrame),
+        str(params["operator"]), float(params["offsetPct"]),
+    )}
+
+
+def _not(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"condition": negate(_expect(inputs, "condition", ConditionFrame))}
+
+
+def _filter(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"universe": filter_universe(_universe(inputs["universe"]), _expect(inputs, "condition", ConditionFrame))}
+
+
+def _select_condition(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"selection": select_matched(_expect(inputs, "condition", ConditionFrame))}
+
+
+def _indicator_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"weight": weight_by_indicator(_expect(inputs, "selection", SelectionFrame),
+                                          _expect(inputs, "value", IndicatorFrame), str(params["direction"]))}
+
+
+def _risk_off(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    return {"weight": scale_when_false(_expect(inputs, "weight", WeightFrame), _expect(inputs, "condition", ConditionFrame),
+                                       float(params["keepWeightPct"]) / 100)}
+
+
+def _transition(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    current = _expect(inputs, "condition", ConditionFrame)
+    previous = getattr(context, "previous_inputs", None)
+    before = None if previous is None else previous.get("condition")
+    entry, exit_ = transition_events(before, current, _as_of(context))  # type: ignore[arg-type]
+    return {"entry": entry, "exit": exit_}
+
+
+def _stop_event(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    _universe(inputs["universe"])
+    return {"exit": stop_exit_events(
+        _history(context), _positions(context), _as_of(context),
+        stop_loss_pct=float(params["stopLossPct"]), take_profit_pct=float(params["takeProfitPct"]),
+        trailing=bool(params["trailing"]),
+    )}
+
+
+def _holding_period(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+    _universe(inputs["universe"])
+    return {"exit": holding_period_exit_events(_history(context), _positions(context), _as_of(context),
+                                               max_days=int(params["maxDays"]))}
+
+
+def _expect(inputs: Mapping[str, object], key: str, kind: type):
+    value = inputs.get(key)
+    if not isinstance(value, kind):
+        raise ValueError(f"{key} 입력은 {kind.__name__}이어야 합니다.")
+    return value
 
 
 def _threshold(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
@@ -146,7 +241,12 @@ def _needs_fundamentals(name: str) -> Handler:
 
 
 def _top_n(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"selection": select_top_n(inputs["score"], int(params["topN"]))}  # type: ignore[arg-type]
+    scores = _expect(inputs, "score", ScoreFrame)
+    buffer = int(params["bufferN"])
+    if buffer == 0:
+        return {"selection": select_top_n(scores, int(params["topN"]))}
+    held = {symbol for symbol, position in _positions(context).items() if position.quantity > 0}
+    return {"selection": select_top_n_with_buffer(scores, int(params["topN"]), held, buffer)}
 
 
 def _min_score(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
@@ -258,13 +358,18 @@ def _hybrid(inputs: Mapping[str, object], params: Mapping[str, object], context:
 
 def _events(strategy_id: str, inputs: Mapping[str, object], context: object, eligible: Mapping[str, bool] | None):
     universe = _universe(inputs["universe"])
-    entries = _event_symbols(inputs["entry"], universe.as_of)
-    exits = _event_symbols(inputs["exit"], universe.as_of)
+    entries = _event_union(inputs["entry"], universe.as_of)
+    exits = _event_union(inputs["exit"], universe.as_of)
     entry_weight = 1 / len(entries) if entries else 1.0
     return evaluate_events(
         strategy_id, universe, entries, exits, _positions(context),
         eligible=eligible, entry_weight=entry_weight,
     )
+
+
+def _event_union(values: object, as_of: datetime) -> set[str]:
+    frames = values if isinstance(values, list) else [values]
+    return set().union(*(_event_symbols(frame, as_of) for frame in frames))
 
 
 def _event_symbols(value: object, as_of: datetime) -> set[str]:
@@ -339,6 +444,22 @@ def register_builtin_handlers() -> None:
         ("strategy.event", _event),
         ("strategy.hybrid", _hybrid),
         ("execution.orders", _execution),
+        ("indicator.return", _indicator(return_indicator, lookback_days=("lookbackDays", int), skip_days=("skipDays", int))),
+        ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int))),
+        ("indicator.price", _indicator(price_indicator, field=("field", str))),
+        ("indicator.high", _indicator(high_indicator, window_days=("windowDays", int))),
+        ("indicator.volatility", _indicator(volatility_indicator, window_days=("windowDays", int), metric=("metric", str))),
+        ("score.from-indicator", _score),
+        ("score.combine", _score_combine),
+        ("condition.compare", _compare),
+        ("logic.not", _not),
+        ("universe.filter", _filter),
+        ("selection.condition", _select_condition),
+        ("allocation.indicator-weight", _indicator_weight),
+        ("portfolio.risk-off", _risk_off),
+        ("event.transition", _transition),
+        ("event.stop", _stop_event),
+        ("event.holding-period", _holding_period),
     )
     for function_id, handler in pairs:
         register(function_id, handler)

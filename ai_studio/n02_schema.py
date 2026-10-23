@@ -1,5 +1,6 @@
 """블록 사이로 오가는 값의 종류. 화면의 연결선은 이 타입이 맞을 때만 허용한다."""
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -10,7 +11,7 @@ PortType = Literal[
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
 FunctionCategory = Literal[
     "universe", "momentum", "allocation", "factor", "logic", "strategy",
-    "indicator", "condition", "selection", "portfolio", "execution",
+    "indicator", "condition", "selection", "portfolio", "execution", "score", "event",
 ]
 ExecutionType = Literal[
     "STATE_REBALANCE", "EVENT_LIFECYCLE", "HYBRID", "MULTI_LEG_EVENT",
@@ -104,6 +105,16 @@ class FunctionSpec:
     required_data: RequiredData = RequiredData()
     input_schema_version: str = "1.0.0"
     output_schema_version: str = "1.0.0"
+    # 직전 거래일의 입력도 필요한 블록. 실행기가 상류 그래프를 전날 기준으로 한 번 더 실행해 넘긴다.
+    needs_previous: bool = False
+    # 파라미터로 정해지는 최소 봉 수. 없으면 required_data.minimum_history를 쓴다.
+    lookback: Callable[[Mapping[str, object]], int] | None = None
+
+    def minimum_history(self, params: Mapping[str, object] | None = None) -> int:
+        if self.lookback is None:
+            return self.required_data.minimum_history
+        merged = {param.key: param.default for param in self.params} | dict(params or {})
+        return self.lookback(merged)
 
     @property
     def behavior_type(self) -> str | None:

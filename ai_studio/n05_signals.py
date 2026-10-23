@@ -85,3 +85,56 @@ def moving_average_cross_events(
             elif exit_:
                 output.append(EventRow(symbol, series[index].available_at, "exit"))
     return EventFrame(tuple(sorted(output, key=lambda row: (row.as_of, row.instrument_id, row.kind))))
+
+
+MARKET_ID = "MARKET"
+
+
+def compare_indicators(
+    left: IndicatorFrame, right: IndicatorFrame, operator: str, offset_pct: float = 0,
+) -> ConditionFrame:
+    """left (연산자) right × (1 + offset%). 한쪽이 시장 한 줄이면 다른 쪽 모든 종목에 펼친다.
+    양쪽에 다 있는 종목만 행이 된다."""
+    try:
+        predicate = _OPERATORS[operator]
+    except KeyError as error:
+        raise ValueError(f"지원하지 않는 비교입니다: {operator}") from error
+    lefts = {row.instrument_id: row.value for row in left.rows}
+    rights = {row.instrument_id: row.value for row in right.rows}
+    left_ids = list(lefts)
+    right_ids = list(rights)
+    if left_ids == [MARKET_ID] and right_ids != [MARKET_ID]:
+        ids = right_ids
+    elif right_ids == [MARKET_ID] and left_ids != [MARKET_ID]:
+        ids = left_ids
+    else:
+        ids = [symbol for symbol in left_ids if symbol in rights]
+    factor = 1 + offset_pct / 100
+    rows = []
+    for symbol in ids:
+        lvalue = lefts.get(symbol, lefts.get(MARKET_ID))
+        rvalue = rights.get(symbol, rights.get(MARKET_ID))
+        rows.append(ConditionRow(symbol, predicate(lvalue, rvalue * factor)))
+    return ConditionFrame(tuple(rows))
+
+
+def negate(condition: ConditionFrame) -> ConditionFrame:
+    return ConditionFrame(tuple(ConditionRow(row.instrument_id, not row.matched) for row in condition.rows))
+
+
+def transition_events(
+    previous: ConditionFrame | None, current: ConditionFrame, as_of: datetime,
+) -> tuple[EventFrame, EventFrame]:
+    """이전 평가에서 거짓→지금 참이면 진입, 참→거짓이면 청산. 이전 값이 없는 종목은 이벤트가 없다."""
+    if previous is None:
+        return EventFrame(()), EventFrame(())
+    before = previous.matches()
+    entries: list[EventRow] = []
+    exits: list[EventRow] = []
+    for row in current.rows:
+        was = before.get(row.instrument_id)
+        if was is False and row.matched:
+            entries.append(EventRow(row.instrument_id, as_of, "entry"))
+        elif was is True and not row.matched:
+            exits.append(EventRow(row.instrument_id, as_of, "exit"))
+    return EventFrame(tuple(entries)), EventFrame(tuple(exits))
