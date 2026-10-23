@@ -1,13 +1,11 @@
 """화면 블록의 계산.
 
 `n10_functions`의 블록 id와 대응한다. 점수가 높을수록 더 선호되는 종목이다.
-가치·퀄리티 점수는 재무 항목이 필요해서 이 모듈에 없다.
-개월 수는 거래일 21일로 센다.
+재무 지표는 재무 데이터가 필요해서 이 모듈에 없다.
 """
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from math import sqrt
 
 from ai_studio.n01_frames import (
     EventFrame,
@@ -27,14 +25,7 @@ from ai_studio.n01_frames import (
 from ai_studio.n03_market_data import History, bars_until, session_date
 from ai_studio.n04_indicators import daily_returns, moving_average, rsi, stdev, total_return, window_high
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
-from ai_studio.n05_signals import (
-    breaks_prior_high,
-    fast_average_above_slow,
-    moving_average_cross_events,
-    price_above_moving_average,
-)
 
-TRADING_DAYS_PER_MONTH = 21
 
 
 def compose_universe(history: History, as_of: datetime) -> UniverseFrame:
@@ -101,140 +92,6 @@ def _universe(as_of: datetime, symbols: Sequence[str]) -> UniverseFrame:
 
 def _condition(matches: Mapping[str, bool]) -> ConditionFrame:
     return ConditionFrame(tuple(ConditionRow(symbol, matched) for symbol, matched in matches.items()))
-
-
-def momentum_score(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    lookback_months: int = 12,
-    skip_months: int = 1,
-) -> ScoreFrame:
-    """momentum.factor. 최근 skip 개월을 뺀 과거 lookback 개월 수익률."""
-    if lookback_months < 1 or skip_months < 0:
-        raise ValueError("모멘텀 기간은 1개월 이상, 제외 기간은 0개월 이상이어야 합니다.")
-    lookback = lookback_months * TRADING_DAYS_PER_MONTH
-    skip = skip_months * TRADING_DAYS_PER_MONTH
-    rows: list[ScoreRow] = []
-    for symbol in symbols:
-        series = _upto(history, symbol, as_of)
-        end = len(series) - 1 - skip
-        start = end - lookback
-        if start < 0 or end < 0 or series[start].close <= 0:
-            continue
-        raw = series[end].close / series[start].close - 1
-        rows.append(ScoreRow(symbol, raw, raw_value=raw))
-    return ScoreFrame(tuple(rows))
-
-
-def trend_condition(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    method: str = "price_above_ma",
-    fast_days: int = 20,
-    slow_days: int = 60,
-) -> ConditionFrame:
-    """momentum.trend. 가격이 부족하면 거짓이다."""
-    if fast_days < 1 or slow_days < 2:
-        raise ValueError("이동평균 기간이 너무 짧습니다.")
-    if method == "ma_cross" and fast_days >= slow_days:
-        raise ValueError("단기 이동평균은 장기보다 짧아야 합니다.")
-    if method not in ("price_above_ma", "ma_cross"):
-        raise ValueError(f"지원하지 않는 추세 판단입니다: {method}")
-    output: dict[str, bool] = {}
-    for symbol in symbols:
-        closes = [bar.close for bar in _upto(history, symbol, as_of)]
-        if len(closes) < slow_days:
-            output[symbol] = False
-            continue
-        slow = moving_average(closes, slow_days)
-        if method == "price_above_ma":
-            output[symbol] = price_above_moving_average(closes[-1], slow)
-        else:
-            fast = moving_average(closes, fast_days)
-            output[symbol] = fast_average_above_slow(fast, slow)
-    return _condition(output)
-
-
-def breakout_condition(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    window_days: int = 252,
-    buffer_pct: float = 0,
-) -> ConditionFrame:
-    """momentum.breakout. 오늘 종가가 이전 고점보다 여유 비율 이상이면 참."""
-    if window_days < 2 or buffer_pct < 0:
-        raise ValueError("고점 기간은 2일 이상이고 돌파 여유는 0 이상이어야 합니다.")
-    output: dict[str, bool] = {}
-    for symbol in symbols:
-        series = _upto(history, symbol, as_of)
-        if len(series) < window_days + 1:
-            output[symbol] = False
-            continue
-        highs = [bar.high for bar in series[:-1]]
-        prior_high = window_high(highs, window_days)
-        output[symbol] = breaks_prior_high(series[-1].close, prior_high, buffer_pct)
-    return _condition(output)
-
-
-def low_volatility_score(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    metric: str = "stdev",
-    window_days: int = 252,
-) -> ScoreFrame:
-    """factor.low-volatility. 점수는 변동이 작을수록 높다. raw_value가 표준편차 또는 베타다."""
-    if window_days < 2:
-        raise ValueError("변동성 기간은 2일 이상이어야 합니다.")
-    if metric == "stdev":
-        rows = []
-        for symbol in symbols:
-            returns = _tail_returns(_upto(history, symbol, as_of), window_days)
-            if len(returns) < window_days:
-                continue
-            deviation = _stdev(returns)
-            rows.append(ScoreRow(symbol, -deviation, raw_value=deviation))
-        return ScoreFrame(tuple(rows))
-    if metric == "beta":
-        return _beta_scores(history, symbols, as_of, window_days)
-    raise ValueError(f"지원하지 않는 변동성 지표입니다: {metric}")
-
-
-def rsi_indicator(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    period: int = 14,
-) -> IndicatorFrame:
-    """indicator.rsi. 가격이 부족하면 그 종목은 빠진다."""
-    rows: list[IndicatorRow] = []
-    for symbol in symbols:
-        closes = [bar.close for bar in _upto(history, symbol, as_of)]
-        if len(closes) < period + 1:
-            continue
-        rows.append(IndicatorRow(symbol, rsi(closes, period)))
-    return IndicatorFrame(tuple(rows))
-
-
-def moving_average_cross(
-    history: History,
-    symbols: Sequence[str],
-    as_of: datetime,
-    *,
-    fast_days: int = 20,
-    slow_days: int = 60,
-) -> EventFrame:
-    """momentum.ma-cross. 교차한 날만 진입 또는 청산 이벤트가 된다. as_of 이후 봉은 보지 않는다."""
-    bars = [bar for symbol in symbols for bar in bars_until(history, symbol, as_of)]
-    return moving_average_cross_events(bars, fast_days, slow_days)
 
 
 def combine_conditions(operator: str, *conditions: ConditionFrame) -> ConditionFrame:
@@ -322,73 +179,8 @@ def allocate_target_weight(selection: SelectionFrame, scheme: str = "equal") -> 
     raise ValueError(f"지원하지 않는 배분 방식입니다: {scheme}")
 
 
-def apply_stop(
-    weights: WeightFrame,
-    *,
-    entry_prices: Mapping[str, float],
-    last_prices: Mapping[str, float],
-    peak_prices: Mapping[str, float] | None = None,
-    stop_loss_pct: float = 10,
-    take_profit_pct: float = 30,
-    trailing: bool = False,
-) -> WeightFrame:
-    """allocation.stop. 손절 또는 익절이면 그 종목 비중을 0으로 만든다."""
-    if stop_loss_pct < 0 or take_profit_pct < 0:
-        raise ValueError("손절·익절 비율은 0 이상이어야 합니다.")
-    if trailing and peak_prices is None:
-        raise ValueError("고점 대비 손절에는 보유 중 고가가 필요합니다.")
-    rows: list[WeightRow] = []
-    for row in weights.rows:
-        if row.weight == 0:
-            rows.append(row)
-            continue
-        entry = entry_prices[row.instrument_id]
-        last = last_prices[row.instrument_id]
-        stop_base = peak_prices[row.instrument_id] if trailing and peak_prices is not None else entry
-        stopped = last <= stop_base * (1 - stop_loss_pct / 100)
-        took_profit = last >= entry * (1 + take_profit_pct / 100)
-        rows.append(WeightRow(row.instrument_id, 0.0 if stopped or took_profit else row.weight))
-    return WeightFrame(tuple(rows))
-
-
-def rebalance_weights(
-    target: WeightFrame,
-    actual: WeightFrame,
-    *,
-    due: bool,
-    drift_threshold_pct: float = 5,
-) -> WeightFrame:
-    """allocation.rebalance. 정기 시점이거나 이탈이 크면 목표 비중을, 아니면 현재 비중을 반환한다."""
-    if drift_threshold_pct < 0:
-        raise ValueError("이탈 허용은 0 이상이어야 합니다.")
-    if due:
-        return target
-    target_map = {row.instrument_id: row.weight for row in target.rows}
-    actual_map = {row.instrument_id: row.weight for row in actual.rows}
-    symbols = set(target_map) | set(actual_map)
-    drifted = any(
-        abs(actual_map.get(symbol, 0.0) - target_map.get(symbol, 0.0)) >= drift_threshold_pct / 100
-        for symbol in symbols
-    )
-    return target if drifted else actual
-
-
 def _upto(history: History, symbol: str, as_of: datetime) -> Sequence[MarketBar]:
     return bars_until(history, symbol, as_of)
-
-
-def _tail_returns(series: Sequence[MarketBar], window: int) -> list[float]:
-    closes = [bar.close for bar in series]
-    if len(closes) < window + 1:
-        return []
-    tail = closes[-(window + 1):]
-    return [tail[index] / tail[index - 1] - 1 for index in range(1, len(tail)) if tail[index - 1] > 0]
-
-
-def _stdev(values: Sequence[float]) -> float:
-    mean = sum(values) / len(values)
-    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
-    return sqrt(variance)
 
 
 def _beta_scores(
@@ -535,9 +327,9 @@ def volatility_indicator(history: History, symbols: Sequence[str], as_of: dateti
     raise ValueError(f"지원하지 않는 변동성 지표입니다: {metric}")
 
 
-def rsi_value_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+def rsi_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
                         period: int = 14, scope: str = "symbol") -> IndicatorFrame:
-    """indicator.rsi. scope를 받는 RSI."""
+    """indicator.rsi. 상승폭 평균과 하락폭 평균으로 계산한 RSI."""
     return _indicator(history, symbols, as_of, scope, period + 1,
                       lambda s: rsi([bar.close for bar in s], period))
 

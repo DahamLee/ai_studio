@@ -7,7 +7,7 @@ from ai_studio.n01_frames import TargetPortfolio, UniverseFrame, WeightFrame
 from ai_studio.n03_market_data import DATA_PATH, daily_bar, history_from_bars, load_ohlc, session_close as at
 from ai_studio.n01_frames import MarketBar
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
-from ai_studio.n12_strategies import momentum_top10
+from ai_studio.n12_strategies import momentum_top10, place
 from ai_studio.n13_connect import validate_strategy
 from ai_studio.n07_runtime import evaluate_state
 from ai_studio.n09_backtest import Ledger
@@ -26,13 +26,15 @@ def pipeline(scheme: str, top_n: int) -> StrategyGraph:
     return StrategyGraph(
         nodes=(
             StrategyNode("universe", "universe.compose", {"market": "US_EQUITY", "benchmark": "SPX"}),
-            StrategyNode("score", "momentum.factor", {"lookbackMonths": 1, "skipMonths": 0}),
+            StrategyNode("ret", "indicator.return", {"lookbackDays": 21}),
+            StrategyNode("score", "score.from-indicator", {}),
             StrategyNode("pick", "selection.top-n", {"topN": top_n}),
             StrategyNode("weight", "allocation.target-weight", {"scheme": scheme}),
             StrategyNode("target", "portfolio.target", {}),
         ),
         edges=(
-            StrategyEdge("universe", "universe", "score", "universe"),
+            StrategyEdge("universe", "universe", "ret", "universe"),
+            StrategyEdge("ret", "value", "score", "value"),
             StrategyEdge("score", "score", "pick", "score"),
             StrategyEdge("pick", "selection", "weight", "selection"),
             StrategyEdge("weight", "weight", "target", "weight"),
@@ -68,7 +70,7 @@ class EngineTests(unittest.TestCase):
         graph = StrategyGraph(
             nodes=(
                 StrategyNode("universe", "universe.compose", {"market": "US_EQUITY", "benchmark": "SPX"}),
-                StrategyNode("value", "factor.value", {}),
+                StrategyNode("value", "indicator.fundamental", {"field": "pbr"}),
             ),
             edges=(StrategyEdge("universe", "universe", "value", "universe"),),
         )
@@ -79,35 +81,35 @@ class EngineTests(unittest.TestCase):
         graph = StrategyGraph(
             nodes=(
                 StrategyNode("universe", "universe.compose", {}),
-                StrategyNode("score", "momentum.factor", {}),
+                StrategyNode("ret", "indicator.return", {}),
+                StrategyNode("score", "score.from-indicator", {}),
                 StrategyNode("weight", "allocation.target-weight", {}),
             ),
             edges=(
-                StrategyEdge("universe", "universe", "score", "universe"),
+                StrategyEdge("universe", "universe", "ret", "universe"),
+                StrategyEdge("ret", "value", "score", "value"),
                 StrategyEdge("score", "score", "weight", "selection"),
             ),
         )
         with self.assertRaises(ValueError):
             execute(graph, self.context)
 
-    def test_cross_instance_calls_event_strategy(self):
+    def test_cross_preset_calls_event_strategy(self):
         history = history_from_bars(closes("AAPL", [3, 2, 1, 1, 3, 4]))
+        cross = place("golden-cross", "cross", {"universe": ("universe", "universe")},
+                      {"fast": {"windowDays": 2}, "slow": {"windowDays": 3}})
         graph = StrategyGraph(
-            nodes=(
-                StrategyNode("universe", "universe.compose", {}),
-                StrategyNode("cross", "momentum.ma-cross", {"fastDays": 2, "slowDays": 3}),
-                StrategyNode("decision", "strategy.event", {}),
-            ),
-            edges=(
-                StrategyEdge("universe", "universe", "cross", "universe"),
+            nodes=(StrategyNode("universe", "universe.compose", {}),) + cross.nodes
+            + (StrategyNode("decision", "strategy.event", {}),),
+            edges=cross.edges + (
                 StrategyEdge("universe", "universe", "decision", "universe"),
-                StrategyEdge("cross", "entry", "decision", "entry"),
-                StrategyEdge("cross", "exit", "decision", "exit"),
+                StrategyEdge(*cross.out("entry"), "decision", "entry"),
+                StrategyEdge(*cross.out("exit"), "decision", "exit"),
             ),
         )
         result = execute(graph, ExecutionContext(at("2026-01-05"), history))
         signal = result.port("decision", "result").signals[0]
-        self.assertEqual(signal.action, "ENTER")
+        self.assertEqual((signal.action, signal.target_weight), ("ENTER", 0.1))
 
     @unittest.skipUnless(Path(DATA_PATH).exists(), "일봉 CSV가 없습니다.")
     def test_saved_ohlc_runs_the_momentum_instance(self):

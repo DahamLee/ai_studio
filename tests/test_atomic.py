@@ -1,4 +1,4 @@
-"""원자 노드 단위 테스트와, 원자 노드 조합이 기존 복합 노드와 같은 결과를 내는지 확인한다."""
+"""원자 노드 단위 테스트와, 프리셋이 손으로 계산한 기준값과 같은지 확인한다."""
 
 import unittest
 from datetime import date, timedelta
@@ -18,6 +18,7 @@ from ai_studio.n07_runtime import PositionState
 from ai_studio.n08_blocks import (
     filter_universe, holding_period_exit_events, market_series, stop_exit_events,
 )
+from ai_studio.n12_strategies import place
 from ai_studio.n14_engine import ExecutionContext, execute
 
 START = date(2026, 1, 1)
@@ -47,74 +48,73 @@ def u(to: str, port: str = "universe") -> StrategyEdge:
     return StrategyEdge("u", "universe", to, port)
 
 
-class EquivalenceTests(unittest.TestCase):
-    """step 3에서 복합 노드를 프리셋으로 바꿔도 결과가 같아야 한다."""
+def closes_until(symbol: str, day) -> list[float]:
+    return [bar.close for bar in HISTORY[symbol] if bar.timestamp <= day]
 
-    def test_return_score_equals_momentum_factor(self):
+
+def preset_run(preset_id: str, day, params=None, **context):
+    placed = place(preset_id, "p", {"universe": ("u", "universe")}, params)
+    return run(placed.nodes, placed.edges, day, **context), placed
+
+
+class PresetTests(unittest.TestCase):
+    """프리셋(원자 블록 조합)이 손으로 계산한 기준값과 같은지 확인한다."""
+
+    def test_momentum_score(self):
         for day in DAYS[::10]:
-            out = run((
-                StrategyNode("old", "momentum.factor", {"lookbackMonths": 2, "skipMonths": 1}),
-                StrategyNode("ret", "indicator.return", {"lookbackDays": 42, "skipDays": 21}),
-                StrategyNode("score", "score.from-indicator", {}),
-            ), (u("old"), u("ret"), StrategyEdge("ret", "value", "score", "value")), day)
-            old = {r.instrument_id: r.score for r in out.port("old", "score").rows}
-            new = {r.instrument_id: r.score for r in out.port("score", "score").rows}
-            self.assertEqual(old.keys(), new.keys())
-            for key in old:
-                self.assertAlmostEqual(old[key], new[key])
+            out, placed = preset_run("momentum-score", day, {"ret": {"lookbackDays": 42, "skipDays": 21}})
+            got = {r.instrument_id: r.score for r in out.port(*placed.out("score")).rows}
+            for symbol in HISTORY:
+                closes = closes_until(symbol, day)
+                self.assertAlmostEqual(got[symbol], closes[-22] / closes[-64] - 1)
 
-    def test_price_vs_average_equals_trend(self):
+    def test_trend_filter(self):
         for day in DAYS[::7]:
-            out = run((
-                StrategyNode("old", "momentum.trend", {"method": "price_above_ma", "slowDays": 30}),
-                StrategyNode("price", "indicator.price", {}),
-                StrategyNode("ma", "indicator.moving-average", {"windowDays": 30}),
-                StrategyNode("cmp", "condition.compare", {"operator": "gt"}),
-            ), (u("old"), u("price"), u("ma"),
-                StrategyEdge("price", "value", "cmp", "left"), StrategyEdge("ma", "value", "cmp", "right")), day)
-            self.assertEqual(out.port("old", "condition").matches(), out.port("cmp", "condition").matches())
+            out, placed = preset_run("trend-filter", day, {"ma": {"windowDays": 30}})
+            expected = {s: closes_until(s, day)[-1] > sum(closes_until(s, day)[-30:]) / 30 for s in HISTORY}
+            self.assertEqual(out.port(*placed.out("condition")).matches(), expected)
 
-    def test_close_vs_prior_high_equals_breakout(self):
+    def test_breakout(self):
         for day in DAYS[::7]:
-            out = run((
-                StrategyNode("old", "momentum.breakout", {"windowDays": 20, "bufferPct": 1}),
-                StrategyNode("price", "indicator.price", {}),
-                StrategyNode("high", "indicator.high", {"windowDays": 20}),
-                StrategyNode("cmp", "condition.compare", {"operator": "gte", "offsetPct": 1}),
-            ), (u("old"), u("price"), u("high"),
-                StrategyEdge("price", "value", "cmp", "left"), StrategyEdge("high", "value", "cmp", "right")), day)
-            self.assertEqual(out.port("old", "condition").matches(), out.port("cmp", "condition").matches())
+            out, placed = preset_run("breakout", day, {"high": {"windowDays": 20}, "cmp": {"offsetPct": 1}})
+            expected = {}
+            for symbol in HISTORY:
+                bars = [bar for bar in HISTORY[symbol] if bar.timestamp <= day]
+                expected[symbol] = bars[-1].close >= max(bar.high for bar in bars[-21:-1]) * 1.01
+            self.assertEqual(out.port(*placed.out("condition")).matches(), expected)
 
-    def test_volatility_score_equals_low_volatility(self):
-        out = run((
-            StrategyNode("old", "factor.low-volatility", {"windowDays": 40}),
-            StrategyNode("vol", "indicator.volatility", {"windowDays": 40}),
-            StrategyNode("score", "score.from-indicator", {"direction": "lower"}),
-        ), (u("old"), u("vol"), StrategyEdge("vol", "value", "score", "value")), DAYS[-1])
-        old = {r.instrument_id: r.score for r in out.port("old", "score").rows}
-        new = {r.instrument_id: r.score for r in out.port("score", "score").rows}
-        self.assertEqual(old.keys(), new.keys())
-        for key in old:
-            self.assertAlmostEqual(old[key], new[key])
+    def test_low_volatility_score(self):
+        out, placed = preset_run("low-volatility-score", DAYS[-1], {"vol": {"windowDays": 40}})
+        got = {r.instrument_id: r.score for r in out.port(*placed.out("score")).rows}
+        for symbol in HISTORY:
+            closes = closes_until(symbol, DAYS[-1])[-41:]
+            returns = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+            mean = sum(returns) / len(returns)
+            deviation = (sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
+            self.assertAlmostEqual(got[symbol], -deviation)
 
-    def test_average_cross_transition_equals_ma_cross(self):
+    def test_golden_cross(self):
+        def above(symbol, day):
+            closes = closes_until(symbol, day)
+            return sum(closes[-5:]) / 5 > sum(closes[-20:]) / 20
+
         found = 0
-        for day in DAYS:
-            out = run((
-                StrategyNode("old", "momentum.ma-cross", {"fastDays": 5, "slowDays": 20}),
-                StrategyNode("fast", "indicator.moving-average", {"windowDays": 5}),
-                StrategyNode("slow", "indicator.moving-average", {"windowDays": 20}),
-                StrategyNode("cmp", "condition.compare", {"operator": "gt"}),
-                StrategyNode("edge", "event.transition", {}),
-            ), (u("old"), u("fast"), u("slow"),
-                StrategyEdge("fast", "value", "cmp", "left"), StrategyEdge("slow", "value", "cmp", "right"),
-                StrategyEdge("cmp", "condition", "edge", "condition")), day)
-            for kind in ("entry", "exit"):
-                old = {r.instrument_id for r in out.port("old", kind).rows if r.as_of == day}
-                new = {r.instrument_id for r in out.port("edge", kind).rows}
-                self.assertEqual(old, new, f"{day} {kind}")
-                found += len(new)
+        for previous, day in zip(DAYS, DAYS[1:]):
+            out, placed = preset_run("golden-cross", day, {"fast": {"windowDays": 5}, "slow": {"windowDays": 20}})
+            entries = {r.instrument_id for r in out.port(*placed.out("entry")).rows}
+            exits = {r.instrument_id for r in out.port(*placed.out("exit")).rows}
+            self.assertEqual(entries, {s for s in HISTORY if not above(s, previous) and above(s, day)}, day)
+            self.assertEqual(exits, {s for s in HISTORY if above(s, previous) and not above(s, day)}, day)
+            found += len(entries) + len(exits)
         self.assertGreater(found, 0)
+
+    def test_market_regime_is_one_row(self):
+        out, placed = preset_run("market-regime", DAYS[-1], {"ma": {"windowDays": 20}})
+        self.assertEqual(list(out.port(*placed.out("condition")).matches()), ["MARKET"])
+
+    def test_value_score_needs_fundamentals(self):
+        with self.assertRaisesRegex(ValueError, "재무"):
+            preset_run("value-score", DAYS[-1])
 
 
 class AtomicTests(unittest.TestCase):

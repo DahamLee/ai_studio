@@ -11,7 +11,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ai_studio.n01_frames import MarketBar
+from ai_studio.n01_frames import MarketBar, StrategyValidationError
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "sp500_ohlc_1y.csv"
 EXCHANGE_TZ = ZoneInfo("America/New_York")
@@ -60,10 +60,13 @@ def load_ohlc(path: Path = DATA_PATH) -> tuple[MarketBar, ...]:
 
 
 def history_from_bars(bars: Iterable[MarketBar]) -> dict[str, tuple[MarketBar, ...]]:
-    """종목별로 묶고 시각순으로 정렬한다. 같은 시각의 봉은 나중 것이 남는다."""
+    """종목별로 묶고 시각순으로 정렬한다. 같은 종목·시각의 봉이 두 번 나오면 데이터 오류다."""
     grouped: dict[str, dict[datetime, MarketBar]] = {}
     for bar in bars:
-        grouped.setdefault(bar.symbol, {})[bar.timestamp] = bar
+        stamps = grouped.setdefault(bar.symbol, {})
+        if bar.timestamp in stamps:
+            raise StrategyValidationError(f"중복 시계열: {bar.symbol} {bar.timestamp}")
+        stamps[bar.timestamp] = bar
     return {
         symbol: tuple(stamps[stamp] for stamp in sorted(stamps))
         for symbol, stamps in grouped.items()

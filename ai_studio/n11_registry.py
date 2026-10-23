@@ -1,59 +1,41 @@
 """블록 id와 계산 함수의 대응.
 
 실행기는 이 목록만 보고 함수를 찾는다. 새 구현은 register로 추가하고 실행기는 그대로 둔다.
+핸들러는 (입력 포트 값, 기본값이 채워진 파라미터, 실행 컨텍스트)를 받아 {출력 포트: 값}을 돌려준다.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from typing import TYPE_CHECKING, TypeVar
 
-from ai_studio.n08_blocks import (
-    filter_universe,
-    high_indicator,
-    holding_period_exit_events,
-    moving_average_indicator,
-    price_indicator,
-    return_indicator,
-    rsi_value_indicator,
-    stop_exit_events,
-    volatility_indicator,
-    apply_stop,
-    breakout_condition,
-    combine_conditions,
-    compose_universe,
-    exclude_universe,
-    min_price_universe,
-    if_else_score,
-    if_else_condition,
-    allocate_target_weight,
-    low_volatility_score,
-    momentum_score,
-    moving_average_cross,
-    rebalance_weights,
-    rsi_indicator,
-    set_operation,
-    set_condition_operation,
-    trend_condition,
+from ai_studio.n01_frames import (
+    ConditionFrame, EventFrame, IndicatorFrame, ScoreFrame, SelectionFrame, TargetPortfolio, UniverseFrame,
+    WeightFrame,
 )
-from ai_studio.n01_frames import EventFrame, IndicatorFrame, ScoreFrame, SelectionFrame, ConditionFrame, TargetPortfolio, UniverseFrame, WeightFrame
-from ai_studio.n03_market_data import bars_until, session_date
-from ai_studio.n10_functions import get_function
-from ai_studio.n06_portfolio import (
-    apply_cash_weight,
-    cap_max_weight,
-    combine_scores,
-    scale_when_false,
-    score_from_indicator,
-    select_matched,
-    select_top_n_with_buffer,
-    weight_by_indicator,
-    select_min_score,
-    select_top_n,
-    to_target_portfolio,
-)
+from ai_studio.n03_market_data import session_date
 from ai_studio.n05_signals import compare_indicators, compare_threshold, negate, transition_events
+from ai_studio.n06_portfolio import (
+    apply_cash_weight, cap_max_weight, combine_scores, scale_when_false, score_from_indicator, select_matched,
+    select_min_score, select_top_n, select_top_n_with_buffer, to_target_portfolio, weight_by_indicator,
+)
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
+from ai_studio.n08_blocks import (
+    allocate_target_weight, combine_conditions, compose_universe, exclude_universe, filter_universe,
+    high_indicator, holding_period_exit_events, if_else_condition, if_else_score, min_price_universe,
+    moving_average_indicator, price_indicator, return_indicator, rsi_indicator, set_condition_operation,
+    set_operation, stop_exit_events, volatility_indicator,
+)
+from ai_studio.n10_functions import get_function
 
-Handler = Callable[[Mapping[str, object], Mapping[str, object], object], dict[str, object]]
+if TYPE_CHECKING:
+    from ai_studio.n14_engine import ExecutionContext
+
+Inputs = Mapping[str, object]
+Params = Mapping[str, object]
+Handler = Callable[[Inputs, Params, "ExecutionContext"], dict[str, object]]
+T = TypeVar("T")
 
 _HANDLERS: dict[str, Handler] = {}
 
@@ -74,243 +56,109 @@ def registered_ids() -> tuple[str, ...]:
     return tuple(sorted(_HANDLERS))
 
 
-def _compose(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    if params.get("benchmark", "SPX") != "SPX" or params.get("market", "US_EQUITY") != "US_EQUITY":
-        raise ValueError("적재된 일봉은 S&P 500 미국 주식만 포함합니다.")
-    if float(params.get("minMarketCap") or 0) > 0:
-        raise ValueError("시가총액 필터는 시가총액 데이터가 필요합니다.")
-    return {"universe": compose_universe(_history(context), _as_of(context))}
-
-
-def _exclude(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"universe": exclude_universe(
-        _history(context), universe.symbols, _as_of(context),
-        min_listing_days=int(params["minListingDays"]),
-        min_average_turnover=float(params["minAverageTurnover"]),
-        exclude_halted=bool(params["excludeHalted"]),
-        exclude_financials=bool(params["excludeFinancials"]),
-        exclude_loss_making=bool(params["excludeLossMaking"]),
-    )}
-
-
-def _min_price(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"universe": min_price_universe(
-        _history(context), universe.symbols, _as_of(context),
-        min_close=float(params["minClose"]),
-    )}
-
-
-def _momentum(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"score": momentum_score(
-        _history(context), universe.symbols, _as_of(context),
-        lookback_months=int(params["lookbackMonths"]), skip_months=int(params["skipMonths"]),
-    )}
-
-
-def _trend(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"condition": trend_condition(
-        _history(context), universe.symbols, _as_of(context),
-        method=str(params["method"]), fast_days=int(params["fastDays"]), slow_days=int(params["slowDays"]),
-    )}
-
-
-def _breakout(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"condition": breakout_condition(
-        _history(context), universe.symbols, _as_of(context),
-        window_days=int(params["windowDays"]), buffer_pct=float(params["bufferPct"]),
-    )}
-
-
-def _cross(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    events = moving_average_cross(
-        _history(context), universe.symbols, _as_of(context),
-        fast_days=int(params["fastDays"]), slow_days=int(params["slowDays"]),
-    )
-    return {"entry": events.of_kind("entry"), "exit": events.of_kind("exit")}
-
-
-def _rsi(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"value": rsi_value_indicator(
-        _history(context), universe.symbols, _as_of(context),
-        period=int(params["period"]), scope=str(params["scope"]),
-    )}
-
-
-def _indicator(compute, **names: tuple[str, Callable[[object], object]]) -> Handler:
-    """파라미터 키(camelCase)를 함수 인자로 옮기는 지표 핸들러. names는 {인자: (키, 형변환)}."""
-    def handler(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-        universe = _universe(inputs["universe"])
-        kwargs = {arg: cast(params[key]) for arg, (key, cast) in names.items()}
-        return {"value": compute(_history(context), universe.symbols, _as_of(context),
-                                 scope=str(params["scope"]), **kwargs)}
-    return handler
-
-
-def _score(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    value = _expect(inputs, "value", IndicatorFrame)
-    return {"score": score_from_indicator(value, str(params["direction"]), str(params["method"]))}
-
-
-def _score_combine(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"score": combine_scores(_expect(inputs, "left", ScoreFrame), _expect(inputs, "right", ScoreFrame),
-                                    float(params["leftWeightPct"]) / 100)}
-
-
-def _compare(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"condition": compare_indicators(
-        _expect(inputs, "left", IndicatorFrame), _expect(inputs, "right", IndicatorFrame),
-        str(params["operator"]), float(params["offsetPct"]),
-    )}
-
-
-def _not(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"condition": negate(_expect(inputs, "condition", ConditionFrame))}
-
-
-def _filter(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"universe": filter_universe(_universe(inputs["universe"]), _expect(inputs, "condition", ConditionFrame))}
-
-
-def _select_condition(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"selection": select_matched(_expect(inputs, "condition", ConditionFrame))}
-
-
-def _indicator_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"weight": weight_by_indicator(_expect(inputs, "selection", SelectionFrame),
-                                          _expect(inputs, "value", IndicatorFrame), str(params["direction"]))}
-
-
-def _risk_off(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"weight": scale_when_false(_expect(inputs, "weight", WeightFrame), _expect(inputs, "condition", ConditionFrame),
-                                       float(params["keepWeightPct"]) / 100)}
-
-
-def _transition(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    current = _expect(inputs, "condition", ConditionFrame)
-    previous = getattr(context, "previous_inputs", None)
-    before = None if previous is None else previous.get("condition")
-    entry, exit_ = transition_events(before, current, _as_of(context))  # type: ignore[arg-type]
-    return {"entry": entry, "exit": exit_}
-
-
-def _stop_event(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    _universe(inputs["universe"])
-    return {"exit": stop_exit_events(
-        _history(context), _positions(context), _as_of(context),
-        stop_loss_pct=float(params["stopLossPct"]), take_profit_pct=float(params["takeProfitPct"]),
-        trailing=bool(params["trailing"]),
-    )}
-
-
-def _holding_period(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    _universe(inputs["universe"])
-    return {"exit": holding_period_exit_events(_history(context), _positions(context), _as_of(context),
-                                               max_days=int(params["maxDays"]))}
-
-
-def _expect(inputs: Mapping[str, object], key: str, kind: type):
+def _expect(inputs: Inputs, key: str, kind: type[T]) -> T:
     value = inputs.get(key)
     if not isinstance(value, kind):
         raise ValueError(f"{key} 입력은 {kind.__name__}이어야 합니다.")
     return value
 
 
-def _threshold(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"condition": compare_threshold(inputs["value"], str(params["operator"]), float(params["threshold"]))}  # type: ignore[arg-type]
+def _held(context: ExecutionContext) -> set[str]:
+    return {symbol for symbol, position in context.positions.items() if position.quantity > 0}
 
 
-def _low_vol(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    return {"score": low_volatility_score(
-        _history(context), universe.symbols, _as_of(context),
-        metric=str(params["metric"]), window_days=int(params["windowDays"]),
+# ── 유니버스 ──────────────────────────────────────────────────
+
+
+def _compose(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    if params["benchmark"] != "SPX" or params["market"] != "US_EQUITY":
+        raise ValueError("적재된 일봉은 S&P 500 미국 주식만 포함합니다.")
+    if float(params["minMarketCap"]) > 0:  # type: ignore[arg-type]
+        raise ValueError("시가총액 필터는 시가총액 데이터가 필요합니다.")
+    return {"universe": compose_universe(context.history, context.as_of)}
+
+
+def _exclude(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    return {"universe": exclude_universe(
+        context.history, universe.symbols, context.as_of,
+        min_listing_days=int(params["minListingDays"]),  # type: ignore[arg-type]
+        min_average_turnover=float(params["minAverageTurnover"]),  # type: ignore[arg-type]
+        exclude_halted=bool(params["excludeHalted"]),
+        exclude_financials=bool(params["excludeFinancials"]),
+        exclude_loss_making=bool(params["excludeLossMaking"]),
     )}
 
 
-def _needs_fundamentals(name: str) -> Handler:
-    def handler(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-        raise ValueError(f"{name}은 재무 데이터가 필요합니다. 일봉만으로는 계산하지 않습니다.")
+def _min_price(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    return {"universe": min_price_universe(context.history, universe.symbols, context.as_of,
+                                           min_close=float(params["minClose"]))}  # type: ignore[arg-type]
+
+
+def _filter(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"universe": filter_universe(_expect(inputs, "universe", UniverseFrame),
+                                        _expect(inputs, "condition", ConditionFrame))}
+
+
+# ── 지표 ──────────────────────────────────────────────────────
+
+
+def _indicator(compute: Callable[..., IndicatorFrame], *, scoped: bool = True,
+               **names: tuple[str, Callable[[object], object]]) -> Handler:
+    """파라미터 키(camelCase)를 함수 인자로 옮기는 지표 핸들러. names는 {인자: (키, 형변환)}."""
+    def handler(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+        universe = _expect(inputs, "universe", UniverseFrame)
+        kwargs = {arg: cast(params[key]) for arg, (key, cast) in names.items()}
+        if scoped:
+            kwargs["scope"] = str(params["scope"])
+        return {"value": compute(context.history, universe.symbols, context.as_of, **kwargs)}
     return handler
 
 
-def _top_n(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    scores = _expect(inputs, "score", ScoreFrame)
-    buffer = int(params["bufferN"])
-    if buffer == 0:
-        return {"selection": select_top_n(scores, int(params["topN"]))}
-    held = {symbol for symbol, position in _positions(context).items() if position.quantity > 0}
-    return {"selection": select_top_n_with_buffer(scores, int(params["topN"]), held, buffer)}
+def _fundamental(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    raise ValueError(f"재무 지표({params['field']})는 공개시점이 있는 재무 데이터가 필요합니다. 일봉만으로는 계산하지 않습니다.")
 
 
-def _min_score(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"selection": select_min_score(inputs["score"], float(params["minScore"]))}  # type: ignore[arg-type]
+# ── 점수·조건·논리 ────────────────────────────────────────────
 
 
-def _target_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"weight": allocate_target_weight(inputs["selection"], str(params["scheme"]))}  # type: ignore[arg-type]
+def _score(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"score": score_from_indicator(_expect(inputs, "value", IndicatorFrame),
+                                          str(params["direction"]), str(params["method"]))}
 
 
-def _max_weight(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"weight": cap_max_weight(inputs["weight"], float(params["maxWeightPct"]) / 100)}  # type: ignore[arg-type]
+def _score_combine(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"score": combine_scores(_expect(inputs, "left", ScoreFrame), _expect(inputs, "right", ScoreFrame),
+                                    float(params["leftWeightPct"]) / 100)}  # type: ignore[arg-type]
 
 
-def _cash(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"weight": apply_cash_weight(inputs["weight"], float(params["cashWeightPct"]) / 100)}  # type: ignore[arg-type]
+def _threshold(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"condition": compare_threshold(_expect(inputs, "value", IndicatorFrame), str(params["operator"]),
+                                           float(params["threshold"]))}  # type: ignore[arg-type]
 
 
-def _portfolio(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"portfolio": to_target_portfolio(inputs["weight"])}  # type: ignore[arg-type]
-
-
-def _stop(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    weights = inputs["weight"]
-    if not isinstance(weights, WeightFrame):
-        raise ValueError("손절 입력은 비중 프레임이어야 합니다.")
-    symbols = [row.instrument_id for row in weights.rows]
-    return {"weight": apply_stop(
-        weights,
-        entry_prices=_mapping(context, "entry_prices"),
-        last_prices=_last_prices(context, symbols),
-        peak_prices=_mapping(context, "peak_prices") or None,
-        stop_loss_pct=float(params["stopLossPct"]),
-        take_profit_pct=float(params["takeProfitPct"]),
-        trailing=bool(params["trailing"]),
+def _compare(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"condition": compare_indicators(
+        _expect(inputs, "left", IndicatorFrame), _expect(inputs, "right", IndicatorFrame),
+        str(params["operator"]), float(params["offsetPct"]),  # type: ignore[arg-type]
     )}
 
 
-def _rebalance(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    target = inputs["weight"]
-    actual = getattr(context, "actual_weights", None)
-    if not isinstance(target, WeightFrame):
-        raise ValueError("리밸런스 입력은 비중 프레임이어야 합니다.")
-    if not isinstance(actual, WeightFrame):
-        return {"weight": target}
-    return {"weight": rebalance_weights(
-        target, actual, due=bool(getattr(context, "rebalance_due", False)),
-        drift_threshold_pct=float(params["driftThresholdPct"]),
-    )}
-
-
-def _combine(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+def _combine(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     conditions = inputs["conditions"]
-    if not isinstance(conditions, list):
-        conditions = [conditions]
+    if not isinstance(conditions, list) or not all(isinstance(item, ConditionFrame) for item in conditions):
+        raise ValueError("조건 조합의 입력은 조건 프레임 목록이어야 합니다.")
     return {"condition": combine_conditions(str(params["operator"]), *conditions)}
 
 
-def _if_else(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    condition = inputs["condition"]
-    then_branch = inputs["thenBranch"]
-    else_branch = inputs["elseBranch"]
-    if not isinstance(condition, ConditionFrame):
-        raise ValueError("IF의 조건은 조건 프레임이어야 합니다.")
+def _not(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"condition": negate(_expect(inputs, "condition", ConditionFrame))}
+
+
+def _if_else(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    condition = _expect(inputs, "condition", ConditionFrame)
+    then_branch, else_branch = inputs["thenBranch"], inputs["elseBranch"]
     if isinstance(then_branch, ScoreFrame) and isinstance(else_branch, ScoreFrame):
         return {"result": if_else_score(condition, then_branch, else_branch)}
     if isinstance(then_branch, ConditionFrame) and isinstance(else_branch, ConditionFrame):
@@ -318,9 +166,8 @@ def _if_else(inputs: Mapping[str, object], params: Mapping[str, object], context
     raise ValueError("IF의 두 분기는 같은 종류의 점수 또는 조건이어야 합니다.")
 
 
-def _set_op(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    left = inputs["left"]
-    right = inputs["right"]
+def _set_op(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    left, right = inputs["left"], inputs["right"]
     operator = str(params["operator"])
     if isinstance(left, UniverseFrame) and isinstance(right, UniverseFrame):
         if left.as_of != right.as_of:
@@ -331,135 +178,165 @@ def _set_op(inputs: Mapping[str, object], params: Mapping[str, object], context:
     raise ValueError("집합 연산은 유니버스 또는 조건 프레임만 받습니다.")
 
 
-def _state(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    universe = _universe(inputs["universe"])
-    portfolio = inputs["portfolio"]
-    if not isinstance(portfolio, TargetPortfolio):
-        raise ValueError("상태 전략의 입력은 목표 포트폴리오여야 합니다.")
+# ── 선정·이벤트 ───────────────────────────────────────────────
+
+
+def _top_n(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    scores = _expect(inputs, "score", ScoreFrame)
+    top_n, buffer = int(params["topN"]), int(params["bufferN"])  # type: ignore[arg-type]
+    if buffer == 0:
+        return {"selection": select_top_n(scores, top_n)}
+    return {"selection": select_top_n_with_buffer(scores, top_n, _held(context), buffer)}
+
+
+def _min_score(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"selection": select_min_score(_expect(inputs, "score", ScoreFrame),
+                                          float(params["minScore"]))}  # type: ignore[arg-type]
+
+
+def _select_condition(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"selection": select_matched(_expect(inputs, "condition", ConditionFrame))}
+
+
+def _transition(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    current = _expect(inputs, "condition", ConditionFrame)
+    previous = None if context.previous_inputs is None else context.previous_inputs.get("condition")
+    if previous is not None and not isinstance(previous, ConditionFrame):
+        raise ValueError("직전 조건은 조건 프레임이어야 합니다.")
+    entry, exit_ = transition_events(previous, current, context.as_of)
+    return {"entry": entry, "exit": exit_}
+
+
+def _stop(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    _expect(inputs, "universe", UniverseFrame)
+    return {"exit": stop_exit_events(
+        context.history, context.positions, context.as_of,
+        stop_loss_pct=float(params["stopLossPct"]),  # type: ignore[arg-type]
+        take_profit_pct=float(params["takeProfitPct"]),  # type: ignore[arg-type]
+        trailing=bool(params["trailing"]),
+    )}
+
+
+def _holding_period(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    _expect(inputs, "universe", UniverseFrame)
+    return {"exit": holding_period_exit_events(context.history, context.positions, context.as_of,
+                                               max_days=int(params["maxDays"]))}  # type: ignore[arg-type]
+
+
+# ── 비중·제약·목표 ────────────────────────────────────────────
+
+
+def _target_weight(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"weight": allocate_target_weight(_expect(inputs, "selection", SelectionFrame), str(params["scheme"]))}
+
+
+def _indicator_weight(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"weight": weight_by_indicator(_expect(inputs, "selection", SelectionFrame),
+                                          _expect(inputs, "value", IndicatorFrame), str(params["direction"]))}
+
+
+def _max_weight(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"weight": cap_max_weight(_expect(inputs, "weight", WeightFrame),
+                                     float(params["maxWeightPct"]) / 100)}  # type: ignore[arg-type]
+
+
+def _cash(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"weight": apply_cash_weight(_expect(inputs, "weight", WeightFrame),
+                                        float(params["cashWeightPct"]) / 100)}  # type: ignore[arg-type]
+
+
+def _risk_off(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"weight": scale_when_false(_expect(inputs, "weight", WeightFrame), _expect(inputs, "condition", ConditionFrame),
+                                       float(params["keepWeightPct"]) / 100)}  # type: ignore[arg-type]
+
+
+def _portfolio(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    return {"portfolio": to_target_portfolio(_expect(inputs, "weight", WeightFrame))}
+
+
+# ── 전략 판단·실행 ────────────────────────────────────────────
+
+
+def _state(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    portfolio = _expect(inputs, "portfolio", TargetPortfolio)
     targets = {row.instrument_id: row.target_weight for row in portfolio.positions}
-    return {"result": evaluate_state("state", universe, targets, positions=_positions(context))}
+    return {"result": evaluate_state("state", universe, targets, positions=context.positions)}
 
 
-def _execution(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
+def _event(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    gate = inputs.get("gate")
+    eligible: dict[str, bool] | None = None
+    priority: tuple[str, ...] | None = None
+    if isinstance(gate, ConditionFrame):
+        eligible = gate.matches()
+    elif isinstance(gate, SelectionFrame):
+        priority = tuple(row.instrument_id for row in sorted(gate.rows, key=lambda row: row.rank))
+        eligible = {symbol: True for symbol in priority}
+    elif gate is not None:
+        raise ValueError("진입 게이트는 조건 또는 선정 결과여야 합니다.")
+    return {"result": evaluate_events(
+        "event", universe, _event_union(inputs["entry"], context.as_of), _event_union(inputs["exit"], context.as_of),
+        context.positions, eligible=eligible, max_positions=int(params["maxPositions"]),  # type: ignore[arg-type]
+        priority=priority,
+    )}
+
+
+def _execution(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     """실행 노드는 평가 시점마다 아무것도 계산하지 않는다. 주문과 체결은 n15의 실행기가 맡는다."""
     return {}
 
 
-def _event(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    return {"result": _events("event", inputs, context, eligible=None)}
-
-
-def _hybrid(inputs: Mapping[str, object], params: Mapping[str, object], context: object) -> dict[str, object]:
-    eligible = inputs["eligible"]
-    if not isinstance(eligible, ConditionFrame):
-        raise ValueError("혼합 전략의 투자 가능 상태는 조건 프레임이어야 합니다.")
-    return {"result": _events("hybrid", inputs, context, eligible=eligible.matches())}
-
-
-def _events(strategy_id: str, inputs: Mapping[str, object], context: object, eligible: Mapping[str, bool] | None):
-    universe = _universe(inputs["universe"])
-    entries = _event_union(inputs["entry"], universe.as_of)
-    exits = _event_union(inputs["exit"], universe.as_of)
-    entry_weight = 1 / len(entries) if entries else 1.0
-    return evaluate_events(
-        strategy_id, universe, entries, exits, _positions(context),
-        eligible=eligible, entry_weight=entry_weight,
-    )
-
-
 def _event_union(values: object, as_of: datetime) -> set[str]:
+    """평가일과 같은 거래일에 발생한 이벤트의 종목. 여러 이벤트 입력은 합친다."""
     frames = values if isinstance(values, list) else [values]
-    return set().union(*(_event_symbols(frame, as_of) for frame in frames))
-
-
-def _event_symbols(value: object, as_of: datetime) -> set[str]:
-    """평가일과 같은 거래일에 발생한 이벤트만."""
-    if not isinstance(value, EventFrame):
-        raise ValueError("이벤트 입력은 이벤트 프레임이어야 합니다.")
     day = session_date(as_of)
-    return {row.instrument_id for row in value.rows if row.as_of <= as_of and session_date(row.as_of) == day}
-
-
-def _universe(value: object) -> UniverseFrame:
-    if not isinstance(value, UniverseFrame):
-        raise ValueError("유니버스 입력은 UniverseFrame이어야 합니다.")
-    return value
-
-
-def _history(context: object):
-    return getattr(context, "history")
-
-
-def _as_of(context: object) -> datetime:
-    return getattr(context, "as_of")
-
-
-def _mapping(context: object, name: str) -> Mapping[str, float]:
-    value = getattr(context, name, {})
-    return value or {}
-
-
-def _positions(context: object):
-    return getattr(context, "positions", {}) or {}
-
-
-def _last_prices(context: object, symbols: Sequence[str]) -> dict[str, float]:
-    history = _history(context)
-    as_of = _as_of(context)
-    prices: dict[str, float] = {}
-    for symbol in symbols:
-        series = bars_until(history, symbol, as_of)
-        if not series:
-            raise ValueError(f"{symbol}: {as_of} 종가가 없습니다.")
-        prices[symbol] = series[-1].close
-    return prices
+    symbols: set[str] = set()
+    for frame in frames:
+        if not isinstance(frame, EventFrame):
+            raise ValueError("이벤트 입력은 이벤트 프레임이어야 합니다.")
+        symbols.update(row.instrument_id for row in frame.rows
+                       if row.as_of <= as_of and session_date(row.as_of) == day)
+    return symbols
 
 
 def register_builtin_handlers() -> None:
-    pairs = (
+    pairs: tuple[tuple[str, Handler], ...] = (
         ("universe.compose", _compose),
         ("universe.exclude", _exclude),
         ("universe.min-price", _min_price),
-        ("momentum.factor", _momentum),
-        ("momentum.trend", _trend),
-        ("momentum.breakout", _breakout),
-        ("momentum.ma-cross", _cross),
-        ("indicator.rsi", _rsi),
-        ("condition.threshold", _threshold),
-        ("factor.low-volatility", _low_vol),
-        ("factor.value", _needs_fundamentals("가치 점수")),
-        ("factor.quality", _needs_fundamentals("퀄리티 점수")),
-        ("selection.top-n", _top_n),
-        ("selection.threshold", _min_score),
-        ("allocation.target-weight", _target_weight),
-        ("allocation.stop", _stop),
-        ("allocation.rebalance", _rebalance),
-        ("portfolio.max-weight", _max_weight),
-        ("portfolio.cash", _cash),
-        ("portfolio.target", _portfolio),
-        ("logic.combine", _combine),
-        ("logic.if-else", _if_else),
-        ("logic.set-op", _set_op),
-        ("strategy.state", _state),
-        ("strategy.event", _event),
-        ("strategy.hybrid", _hybrid),
-        ("execution.orders", _execution),
+        ("universe.filter", _filter),
         ("indicator.return", _indicator(return_indicator, lookback_days=("lookbackDays", int), skip_days=("skipDays", int))),
         ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int))),
         ("indicator.price", _indicator(price_indicator, field=("field", str))),
         ("indicator.high", _indicator(high_indicator, window_days=("windowDays", int))),
         ("indicator.volatility", _indicator(volatility_indicator, window_days=("windowDays", int), metric=("metric", str))),
+        ("indicator.rsi", _indicator(rsi_indicator, period=("period", int))),
+        ("indicator.fundamental", _fundamental),
         ("score.from-indicator", _score),
         ("score.combine", _score_combine),
+        ("condition.threshold", _threshold),
         ("condition.compare", _compare),
+        ("logic.combine", _combine),
         ("logic.not", _not),
-        ("universe.filter", _filter),
+        ("logic.if-else", _if_else),
+        ("logic.set-op", _set_op),
+        ("selection.top-n", _top_n),
+        ("selection.threshold", _min_score),
         ("selection.condition", _select_condition),
-        ("allocation.indicator-weight", _indicator_weight),
-        ("portfolio.risk-off", _risk_off),
         ("event.transition", _transition),
-        ("event.stop", _stop_event),
+        ("event.stop", _stop),
         ("event.holding-period", _holding_period),
+        ("allocation.target-weight", _target_weight),
+        ("allocation.indicator-weight", _indicator_weight),
+        ("portfolio.max-weight", _max_weight),
+        ("portfolio.cash", _cash),
+        ("portfolio.risk-off", _risk_off),
+        ("portfolio.target", _portfolio),
+        ("strategy.state", _state),
+        ("strategy.event", _event),
+        ("execution.orders", _execution),
     )
     for function_id, handler in pairs:
         register(function_id, handler)

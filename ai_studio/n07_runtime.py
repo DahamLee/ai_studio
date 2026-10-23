@@ -51,8 +51,7 @@ class StrategyResult:
             raise StrategyValidationError(f"{self.strategy_id}: 지원하지 않는 전략 실행유형입니다.")
         for row in self.signals:
             if row.symbol not in self.universe.symbols and not (
-                self.strategy_execution_type == "STATE_REBALANCE"
-                and row.desired_state == "FLAT" and row.target_weight == 0
+                row.desired_state == "FLAT" and row.target_weight == 0
             ):
                 raise StrategyValidationError(f"{row.symbol}: 유니버스 밖 종목은 청산만 가능합니다.")
             if row.target_weight is not None:
@@ -140,29 +139,41 @@ def evaluate_state(
 def evaluate_events(
     strategy_id: str, universe: UniverseFrame, entries: set[str], exits: set[str],
     positions: Mapping[str, PositionState], *, eligible: Mapping[str, bool] | None = None,
-    entry_weight: float = 1.0,
+    max_positions: int = 1, priority: Sequence[str] | None = None,
 ) -> StrategyResult:
-    """Exit wins a conflict; false events and repeated entries preserve quantity."""
-    if not entries.union(exits) <= set(universe.symbols):
-        raise StrategyValidationError(f"{strategy_id}: 이벤트 종목이 유니버스 밖에 있습니다.")
-    if eligible is not None and set(eligible) != set(universe.symbols):
-        raise StrategyValidationError(f"{strategy_id}: 투자 가능 상태가 유니버스와 일치하지 않습니다.")
-    _nonnegative(entry_weight, "entry_weight")
-    if entry_weight > 1:
-        raise StrategyValidationError("entry_weight가 1을 초과합니다.")
+    """청산이 진입보다 우선한다. 이벤트가 없거나 이미 보유 중인 진입은 수량을 유지한다.
+
+    진입 비중은 1/max_positions이고, 보유 수가 max_positions를 넘지 않도록 빈 자리만큼만 진입한다.
+    자리가 모자라면 priority 순서(없으면 종목 id 순)로 고른다. eligible이 있으면 참인 종목만 진입한다(HYBRID).
+    유니버스에서 빠진 보유 종목도 청산 이벤트가 있으면 청산한다.
+    """
+    held = {s for s, p in positions.items() if p.quantity > 0}
+    if not entries <= set(universe.symbols):
+        raise StrategyValidationError(f"{strategy_id}: 진입 이벤트 종목이 유니버스 밖에 있습니다.")
+    if not exits <= set(universe.symbols) | held:
+        raise StrategyValidationError(f"{strategy_id}: 청산 이벤트 종목이 유니버스와 보유 밖에 있습니다.")
+    if max_positions < 1:
+        raise StrategyValidationError(f"{strategy_id}: 최대 보유 수는 1 이상이어야 합니다.")
+    weight = 1 / max_positions
+    can_enter = {s: eligible is None or bool(eligible.get(s, False)) for s in universe.symbols}
+    exiting = {s for s in exits if s in held}
+    free = max(max_positions - len(held - exiting), 0)
+    order = {s: i for i, s in enumerate(priority or ())}
+    candidates = sorted((s for s in entries if s not in held and s not in exits and can_enter[s]),
+                        key=lambda s: (order.get(s, len(order)), s))
+    entering = set(candidates[:free])
     signals: list[AssetSignal] = []
-    for symbol in universe.symbols:
-        long = positions.get(symbol, PositionState(symbol)).quantity > 0
-        can_enter = eligible is None or eligible[symbol]
-        if symbol in exits and long:
-            action, desired, weight, event = "EXIT", "FLAT", 0.0, "EXIT"
-        elif symbol in entries and not long and can_enter and symbol not in exits:
-            action, desired, weight, event = "ENTER", "LONG", entry_weight, "ENTER"
+    for symbol in universe.symbols + tuple(sorted(exiting - set(universe.symbols))):
+        if symbol in exiting:
+            action, desired, target, event = "EXIT", "FLAT", 0.0, "EXIT"
+        elif symbol in entering:
+            action, desired, target, event = "ENTER", "LONG", weight, "ENTER"
         else:
-            action, desired, weight, event = "HOLD", "UNCHANGED", None, None
+            action, desired, target, event = "HOLD", "UNCHANGED", None, None
+        reasons = (event,) if event else (("NO_SLOT",) if symbol in candidates else ())
         event_id = f"{strategy_id}:{symbol}:{universe.as_of.isoformat()}:{event}" if event else None
-        signals.append(AssetSignal(symbol, eligible=can_enter, action=action, desired_state=desired,
-                                   target_weight=weight, reason_codes=(event,) if event else (), event_id=event_id))
+        signals.append(AssetSignal(symbol, eligible=can_enter.get(symbol, False), action=action, desired_state=desired,
+                                   target_weight=target, reason_codes=reasons, event_id=event_id))
     mode: ExecutionType = "HYBRID" if eligible is not None else "EVENT_LIFECYCLE"
     return StrategyResult(universe.as_of, strategy_id, mode, universe, tuple(signals))
 

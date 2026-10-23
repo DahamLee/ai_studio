@@ -14,7 +14,7 @@ from ai_studio.n03_market_data import History
 from ai_studio.n11_registry import get_handler
 from ai_studio.n07_runtime import PositionState
 from ai_studio.n02_schema import FunctionSpec, StrategyGraph, StrategyNode
-from ai_studio.n01_frames import WeightFrame, require_tz
+from ai_studio.n01_frames import require_tz
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,10 +23,6 @@ class ExecutionContext:
 
     as_of: datetime
     history: History
-    entry_prices: Mapping[str, float] = field(default_factory=dict)
-    peak_prices: Mapping[str, float] = field(default_factory=dict)
-    actual_weights: WeightFrame | None = None
-    rebalance_due: bool = False
     positions: Mapping[str, PositionState] = field(default_factory=dict)
     # needs_previous 블록에만 채워진다. 같은 입력 포트의 직전 거래일 값이다. 직전 거래일이 없으면 None.
     previous_inputs: Mapping[str, object] | None = None

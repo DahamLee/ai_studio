@@ -167,10 +167,6 @@ def validate_params(fn: FunctionSpec, values: dict[str, object]) -> ConnectResul
                 return ConnectResult(False, f"{fn.name}.{key}: 최솟값 {spec.min} 미만입니다.")
             if spec.max is not None and value > spec.max:
                 return ConnectResult(False, f"{fn.name}.{key}: 최댓값 {spec.max} 초과입니다.")
-    if "fastDays" in resolved and "slowDays" in resolved and resolved["fastDays"] >= resolved["slowDays"]:
-        return ConnectResult(False, f"{fn.name}: 단기 기간은 장기 기간보다 짧아야 합니다.")
-    if "skipMonths" in resolved and "lookbackMonths" in resolved and resolved["skipMonths"] >= resolved["lookbackMonths"]:
-        return ConnectResult(False, f"{fn.name}: 최근 제외 기간은 측정 기간보다 짧아야 합니다.")
     return ConnectResult(True)
 
 
