@@ -243,6 +243,8 @@ def fill_at_next_open(
     orders: Sequence[OrderIntent], next_bars: Mapping[str, MarketBar],
     positions: Mapping[str, PositionState], cash: float, *,
     fee_rate: float = 0.0, slippage_rate: float = 0.0,
+    shortfall: Literal["error", "reduce"] = "error", allow_fractional_shares: bool = False,
+    unfilled: list[OrderIntent] | None = None,
 ) -> tuple[tuple[Fill, ...], dict[str, PositionState], float]:
     """다음 거래일 시가에 체결한다. 수수료는 체결대금과 따로 계산한다.
 
@@ -251,6 +253,9 @@ def fill_at_next_open(
     수수료 = 수량 × 체결가 × 수수료율
     슬리피지 금액 = 수량 × |시가 - 체결가|
     현금은 매수 때 체결대금과 수수료를 빼고, 매도 때 체결대금에서 수수료를 뺀 만큼 더한다.
+
+    시가가 올라 현금이 모자라면 shortfall="error"는 예외를, "reduce"는 살 수 있는 만큼만 체결한다.
+    줄어든 나머지는 unfilled 목록에 남긴다.
     """
     _nonnegative(cash, "cash")
     holdings = dict(positions)
@@ -265,7 +270,17 @@ def fill_at_next_open(
         if order.side == "BUY":
             cost = order.quantity * price + fee
             if cost > cash + 1e-9:
-                raise StrategyValidationError(f"{order.symbol}: 체결 시 가용현금 부족")
+                if shortfall == "error":
+                    raise StrategyValidationError(f"{order.symbol}: 체결 시 가용현금 부족")
+                affordable = max(cash, 0.0) / (price * (1 + fee_rate))
+                reduced = affordable if allow_fractional_shares else floor(affordable + 1e-9)
+                if unfilled is not None:
+                    unfilled.append(OrderIntent(order.symbol, "BUY", order.quantity - reduced, order.signal_at, order.event_id))
+                if reduced <= 0:
+                    continue
+                order = OrderIntent(order.symbol, "BUY", reduced, order.signal_at, order.event_id)
+                fee = order.quantity * price * fee_rate
+                cost = order.quantity * price + fee
             quantity = previous.quantity + order.quantity
             average = (previous.quantity * previous.average_entry_price + order.quantity * price) / quantity
             cash -= cost

@@ -54,7 +54,7 @@ class BacktestResult:
     trade_log: tuple[Fill, ...]
     position_history: tuple[PositionRecord, ...]
     portfolio_history: tuple[PortfolioRecord, ...]
-    # 다음 거래 봉이 없어 체결하지 못한 주문. 상장폐지·거래정지 등.
+    # 체결하지 못한 주문(다음 거래 봉 없음)과 현금 부족으로 줄어든 매수의 나머지 수량.
     skipped_orders: tuple[OrderIntent, ...] = ()
 
 
@@ -63,7 +63,7 @@ class Ledger:
 
     def __init__(
         self, initial_cash: float, *, fee_rate: float = 0.0, slippage_rate: float = 0.0,
-        allow_fractional_shares: bool = False,
+        allow_fractional_shares: bool = False, shortfall: str = "error",
     ) -> None:
         if initial_cash < 0:
             raise StrategyValidationError("initial_cash는 음수일 수 없습니다.")
@@ -71,6 +71,7 @@ class Ledger:
         self.fee_rate = fee_rate
         self.slippage_rate = slippage_rate
         self.allow_fractional_shares = allow_fractional_shares
+        self.shortfall = shortfall
         self.cash = initial_cash
         self.holdings: dict[str, PositionState] = {}
         self._peak = initial_cash
@@ -85,12 +86,13 @@ class Ledger:
 
     def step(
         self, result: StrategyResult, prices: Mapping[str, float], next_bars: Mapping[str, MarketBar],
-        *, rebalance_due: bool = True, drift_threshold: float | None = None,
+        *, rebalance_due: bool = True, drift_threshold: float | None = None, mark: bool = True,
     ) -> tuple[Fill, ...]:
-        """t 종가 판단 → t 기준가격으로 수량 → 이후 시가 체결 → 다음 봉 종가로 평가.
+        """t 종가 판단 → t 기준가격으로 수량 → 이후 시가 체결 → (mark면) 다음 봉 종가로 평가.
 
         prices는 보유 종목과 주문 종목의 t 시점 가격을 모두 담아야 한다.
         drift_threshold가 있으면 주기가 아니어도 실제 비중이 목표에서 그만큼 벗어났을 때 맞춘다.
+        거래일마다 따로 mark를 부르는 실행기는 mark=False로 넘긴다.
         """
         if self._last_as_of is not None and result.as_of <= self._last_as_of:
             raise StrategyValidationError("평가 시점은 앞으로만 진행해야 합니다.")
@@ -110,10 +112,13 @@ class Ledger:
         fills, self.holdings, self.cash = fill_at_next_open(
             fillable, next_bars, self.holdings, self.cash,
             fee_rate=self.fee_rate, slippage_rate=self.slippage_rate,
+            shortfall=self.shortfall, allow_fractional_shares=self.allow_fractional_shares,  # type: ignore[arg-type]
+            unfilled=self._skipped,
         )
         self._trades.extend(fills)
         self._processed.update(fill.event_id for fill in fills if fill.event_id)
-        self._mark(result.as_of, prices, next_bars)
+        if mark:
+            self._mark(result.as_of, prices, next_bars)
         return fills
 
     def _drifted(self, result: StrategyResult, prices: Mapping[str, float], value: float, threshold: float) -> bool:

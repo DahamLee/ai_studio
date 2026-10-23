@@ -87,20 +87,16 @@ def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSett
     drift = float(params["driftThresholdPct"]) / 100 or None
     ledger = Ledger(settings.initial_capital, fee_rate=settings.fee_rate,
                     slippage_rate=settings.slippage_rate,
-                    allow_fractional_shares=bool(params["allowFractional"]))
+                    allow_fractional_shares=bool(params["allowFractional"]), shortfall=str(params["shortfall"]))
     stamps = {symbol: [bar.available_at for bar in series] for symbol, series in history.items()}
 
     evaluation_days = set(evaluations)
-    marked: datetime | None = None
     for day in days:
+        # 종가 평가가 먼저다. 평가일 판단의 체결은 다음 거래일 시가에 일어나 다음 날 종가 평가에 반영된다.
         held = {symbol for symbol, position in ledger.holdings.items() if position.quantity}
+        ledger.mark(day, _closes(history, stamps, held, day))
         if day not in evaluation_days or day == days[-1]:
-            # 평가일이 아니거나 다음 거래일이 없어 체결할 수 없으면 종가로 평가만 한다.
-            if day != marked:
-                ledger.mark(day, _closes(history, stamps, held, day))
-            continue
-        if day != marked:
-            ledger.mark(day, _closes(history, stamps, held, day))
+            continue  # 평가일이 아니거나, 다음 거래일이 없어 체결할 수 없다.
         outputs = execute(graph, ExecutionContext(day, history, positions=dict(ledger.holdings)))
         result = outputs.port(feed.from_node, feed.from_port)
         if not isinstance(result, StrategyResult):
@@ -113,8 +109,7 @@ def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSett
             index = bisect_right(stamps.get(symbol, []), day)
             if index < len(series) and series[index].open_at is not None:
                 next_bars[symbol] = series[index]
-        ledger.step(result, prices, next_bars, rebalance_due=day in due, drift_threshold=drift)
-        marked = ledger.result().portfolio_history[-1].as_of
+        ledger.step(result, prices, next_bars, rebalance_due=day in due, drift_threshold=drift, mark=False)
     return ledger.result()
 
 

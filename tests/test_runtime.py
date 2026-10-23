@@ -210,6 +210,16 @@ class LifecycleTests(unittest.TestCase):
         self.assertAlmostEqual(holdings["A"].average_entry_price, 10.1)
         self.assertAlmostEqual(cash, 100 - 2 * 10.1 * 1.01)
 
+    def test_gap_up_reduces_buy_instead_of_failing(self):
+        order = OrderIntent("A", "BUY", 10, T)
+        gap = MarketBar("A", T + timedelta(days=1), 12, 12, 12, 12, open_at=T + timedelta(hours=18))
+        with self.assertRaisesRegex(StrategyValidationError, "현금 부족"):
+            fill_at_next_open([order], {"A": gap}, {}, 100)
+        unfilled = []
+        fills, holdings, cash = fill_at_next_open([order], {"A": gap}, {}, 100, shortfall="reduce", unfilled=unfilled)
+        self.assertEqual((fills[0].quantity, holdings["A"].quantity, cash), (8, 8, 4))
+        self.assertEqual([(o.symbol, o.quantity) for o in unfilled], [("A", 2)])
+
     def test_invalid_target_schema_rejected(self):
         with self.assertRaisesRegex(StrategyValidationError, "숫자"):
             evaluate_state("s", universe("A"), {"A": None})

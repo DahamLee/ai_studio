@@ -6,7 +6,7 @@
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 from ai_studio.n10_functions import FUNCTIONS, get_function
 from ai_studio.n11_registry import registered_ids
-from ai_studio.n12_strategies import PRESETS, momentum_rebalance, momentum_top10, place
+from ai_studio.n12_strategies import EXAMPLES, PRESETS, momentum_rebalance, momentum_top10, place
 from ai_studio.n13_connect import can_connect, validate_graph, validate_strategy
 
 
@@ -30,7 +30,9 @@ def main() -> None:
         if not check.ok:
             raise SystemExit(f"프리셋 {preset.id}: {check.reason}")
 
-    for name, graph in (("momentum_rebalance", momentum_rebalance()), ("momentum_top10", momentum_top10())):
+    graphs = [("momentum_rebalance", momentum_rebalance()), ("momentum_top10", momentum_top10())]
+    graphs += [(key, build()) for key, (_, build) in EXAMPLES.items()]
+    for name, graph in graphs:
         check = validate_strategy(graph)
         if not check.ok or check.warnings:
             raise SystemExit(f"{name}: {check.reason or check.warnings}")
@@ -59,7 +61,7 @@ def main() -> None:
     if mixed.ok:
         raise SystemExit("점수를 조건 조합에 넣는 그래프는 거부해야 합니다.")
 
-    print(f"ok {len(FUNCTIONS)} functions, {len(PRESETS)} presets")
+    print(f"ok {len(FUNCTIONS)} functions, {len(PRESETS)} presets, {len(EXAMPLES)} examples")
 
 
 if __name__ == "__main__":
