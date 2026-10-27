@@ -7,6 +7,11 @@ export type Port = {
   required: boolean;
   multiple: boolean;
   minConnections: number | null;
+  /** 실제로 받는 타입. 비어 있으면 type 하나만 받는다. */
+  accepts: string[];
+  sameTypeAs: string | null;
+  /** 출력 타입이 이 입력 포트에 연결된 타입을 따른다. */
+  mirrors: string | null;
 };
 
 export type Param = {
@@ -21,20 +26,78 @@ export type Param = {
   max: number | null;
 };
 
+export type ParamValue = string | number | boolean;
+
 export type BlockFunction = {
   id: string;
   name: string;
   category: string;
   categoryLabel: string;
   summary: string;
+  role: string;
+  stage: string;
+  version: string;
+  needsPrevious: boolean;
+  minimumHistory: number;
   inputs: Port[];
   outputs: Port[];
   params: Param[];
   instance: {
     id: string;
     function_id: string;
-    params: Record<string, string | number | boolean>;
+    params: Record<string, ParamValue>;
   };
 };
 
-export type Catalog = { functions: BlockFunction[] };
+export type Stage = { id: string; label: string; roles: string[] };
+
+export type GraphNode = { id: string; function_id: string; params: Record<string, ParamValue> };
+export type GraphEdge = { from: string; fromPort: string; to: string; toPort: string };
+
+export type Preset = {
+  id: string;
+  name: string;
+  summary: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  inputs: { key: string; node: string; port: string }[];
+  outputs: { key: string; node: string; port: string }[];
+};
+
+export type Example = { key: string; name: string; nodes: GraphNode[]; edges: GraphEdge[] };
+
+export type Catalog = {
+  stages: Stage[];
+  functions: BlockFunction[];
+  presets: Preset[];
+  examples: Example[];
+  runContext: Param[];
+};
+
+/** /api/validate 응답. ok는 연결 규칙, complete는 실행 노드까지 닿는 완성 그래프 여부. */
+export type GraphCheck = {
+  ok: boolean;
+  reason: string | null;
+  complete: boolean;
+  completeReason?: string | null;
+  warnings: string[];
+};
+
+/** /api/backtest 응답. 비율은 소수다. */
+export type BacktestReport =
+  | { ok: false; reason: string | null }
+  | {
+      ok: true;
+      summary: {
+        start: string;
+        end: string;
+        finalValue: number;
+        cumulativeReturn: number;
+        maxDrawdown: number;
+        trades: number;
+        skipped: number;
+      };
+      equity: { date: string; value: number }[];
+      trades: { date: string; symbol: string; side: "BUY" | "SELL"; quantity: number; price: number }[];
+      warnings: string[];
+    };

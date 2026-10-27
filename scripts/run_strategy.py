@@ -3,15 +3,14 @@
 실행: PYTHONPATH=. .venv/bin/python scripts/run_strategy.py
 """
 
-from ai_studio.n08_blocks import history_from_bars
+from ai_studio.n03_market_data import history_from_bars, load_ohlc
 from ai_studio.n14_engine import ExecutionContext, execute
-from ai_studio.n03_market_data import load_ohlc
 from ai_studio.n12_strategies import momentum_top10
 
 
 def main() -> None:
     history = history_from_bars(load_ohlc())
-    as_of = max(bar.date for rows in history.values() for bar in rows)
+    as_of = max(bar.timestamp for rows in history.values() for bar in rows)
     result = execute(momentum_top10(), ExecutionContext(as_of, history))
     target = result.port("target", "portfolio")
     print(f"as_of {as_of}")

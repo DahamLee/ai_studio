@@ -1,5 +1,6 @@
 """블록 사이로 오가는 값의 종류. 화면의 연결선은 이 타입이 맞을 때만 허용한다."""
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -10,7 +11,7 @@ PortType = Literal[
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
 FunctionCategory = Literal[
     "universe", "momentum", "allocation", "factor", "logic", "strategy",
-    "indicator", "condition", "selection", "portfolio",
+    "indicator", "condition", "selection", "portfolio", "execution", "score", "event",
 ]
 ExecutionType = Literal[
     "STATE_REBALANCE", "EVENT_LIFECYCLE", "HYBRID", "MULTI_LEG_EVENT",
@@ -26,6 +27,24 @@ EXECUTION_TYPE_METADATA: dict[str, dict[str, str]] = {
     "EXECUTION_ALGORITHM": {"ko_name": "주문 집행 알고리즘", "behavior_type": "집행형"},
     "ANALYSIS_FUNCTION": {"ko_name": "분석·지원 기능", "behavior_type": "분석형"},
 }
+
+# 캔버스의 단계 띠. 블록은 role로 자기 단계가 정해진다. 팩터·시그널 갈래가 같은 띠를 공유한다.
+STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("universe", "유니버스", ("UNIVERSE",)),
+    ("indicator", "지표", ("INDICATOR",)),
+    ("judge", "점수·조건", ("SCORE", "CONDITION", "LOGIC")),
+    ("pick", "선정·이벤트", ("SELECTION", "EVENT")),
+    ("weight", "비중·제약·목표", ("WEIGHTING", "CONSTRAINT", "TARGET")),
+    ("decide", "판단·실행", ("STRATEGY", "EXECUTION")),
+)
+
+
+def stage_of(role: str) -> str:
+    for stage, _, roles in STAGES:
+        if role in roles:
+            return stage
+    raise ValueError(f"단계가 없는 역할입니다: {role}")
+
 
 PORT_TYPE_LABEL: dict[str, str] = {
     "universe": "종목 집합",
@@ -98,12 +117,22 @@ class FunctionSpec:
     version: str = "1.0.0"
     role: Literal[
         "UNIVERSE", "INDICATOR", "CONDITION", "EVENT", "LOGIC", "SCORE",
-        "SELECTION", "WEIGHTING", "CONSTRAINT", "TARGET", "ALLOCATION", "STRATEGY",
+        "SELECTION", "WEIGHTING", "CONSTRAINT", "TARGET", "STRATEGY", "EXECUTION",
     ] = "CONDITION"
     strategy_execution_type: ExecutionType | None = None
     required_data: RequiredData = RequiredData()
     input_schema_version: str = "1.0.0"
     output_schema_version: str = "1.0.0"
+    # 직전 거래일의 입력도 필요한 블록. 실행기가 상류 그래프를 전날 기준으로 한 번 더 실행해 넘긴다.
+    needs_previous: bool = False
+    # 파라미터로 정해지는 최소 봉 수. 없으면 required_data.minimum_history를 쓴다.
+    lookback: Callable[[Mapping[str, object]], int] | None = None
+
+    def minimum_history(self, params: Mapping[str, object] | None = None) -> int:
+        if self.lookback is None:
+            return self.required_data.minimum_history
+        merged = {param.key: param.default for param in self.params} | dict(params or {})
+        return self.lookback(merged)
 
     @property
     def behavior_type(self) -> str | None:
@@ -138,37 +167,17 @@ def _options(*pairs: tuple[str, str]) -> tuple[ParamOption, ...]:
 
 
 # 전략 조립 화면 하단의 공통 실행 조건. 개별 함수 블록이 아니다.
+# 리밸런스 주기는 실행 노드(execution.orders)가, 룩백은 각 지표 블록이 정한다.
 RUN_CONTEXT: tuple[ParamSpec, ...] = (
     ParamSpec("startDate", "조회 시작일", "date", "백테스트 시작일.", default="2020-01-01"),
     ParamSpec("endDate", "조회 종료일", "date", "백테스트 종료일.", default="2025-12-31"),
     ParamSpec(
-        "lookback",
-        "룩백",
-        "enum",
-        "신호를 계산할 때 기본으로 되돌아보는 기간.",
-        default="12M",
-        options=_options(("3M", "3M"), ("6M", "6M"), ("12M", "12M"), ("24M", "24M")),
-    ),
-    ParamSpec(
         "signalFrequency",
         "신호 확인",
         "enum",
-        "신호를 다시 계산하는 주기.",
+        "그래프를 다시 평가하는 주기. 각 주기의 마지막 거래일 종가에 평가한다.",
         default="monthly",
         options=_options(("daily", "일간"), ("weekly", "주간"), ("monthly", "월간")),
-    ),
-    ParamSpec(
-        "rebalanceFrequency",
-        "리밸런스",
-        "enum",
-        "비중을 다시 맞추는 주기.",
-        default="monthly",
-        options=_options(
-            ("weekly", "주간"),
-            ("monthly", "월간"),
-            ("quarterly", "분기"),
-            ("semiannual", "반기"),
-        ),
     ),
     ParamSpec(
         "initialCapital",

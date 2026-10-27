@@ -1,78 +1,91 @@
 # AI STUDIO 블록 계약 및 참조 실행
 
-이 저장소는 노코드 전략 편집기의 블록 메타데이터, 연결 검사, 작은 순수 함수 기반 실행 예제를 담습니다. 시세·재무 데이터 조회, 실제 주문 전송 및 완전한 증권 백테스트 엔진은 포함하지 않습니다.
+노코드 전략 편집기의 블록 계약, 연결 검사, 그래프 실행기와 참조 백테스트 원장을 담습니다. 표준 라이브러리만 씁니다. 실제 주문 전송, 재무 데이터, 완전한 증권 백테스트 엔진은 포함하지 않습니다. 구조와 설계 근거는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)에 있습니다.
 
-## 파이프라인과 공통 계약
+## 파이프라인
 
-| 순서 | 입력 → 출력 | 역할 |
-|---|---|---|
-| 유니버스 | 설정 → `universe` (`UniverseFrame`) | 시각·종목 집합 고정 |
-| 지표·상태 조건 | `universe` + 시점별 데이터 → `score` 또는 `signal` | 점수와 지속 상태 계산 |
-| 이벤트 탐지 | `universe` + 시계열 → `event` | 전일·당일 교차 등 발생 시점만 출력 |
-| 전략 판단 | `universe` + `signal`/`event` → `strategy_result` (`StrategyResult`) | 모든 전략의 동일 출력 계약 |
-| 비중·주문 | 결과 + 보유·현금·기준가격 → `OrderIntent` | 목표 비중, 온주 수량, 현재수량 차이 |
-| 체결·기록 | 주문 + 다음 거래 가능 시가 → `Fill`, `PositionState` | 현금·평균진입가·실현손익 반영 |
+블록은 역할 하나만 가지고, 역할이 캔버스 단계를 정합니다. 팩터 갈래와 시그널 갈래가 같은 단계를 쓰고, 둘 다 전략 판단 → 주문 실행으로 끝납니다.
 
-`signal`은 **지속 상태의 참·거짓**, `event`는 **그 시점에 발생한 전이**입니다. 이벤트의 `False`는 청산이 아니라 `HOLD`입니다. `strategy.state`, `strategy.event`, `strategy.hybrid`의 첫 입력은 유니버스 출력과 같은 `universe`이고, 출력은 모두 `strategy_result`입니다. 결과 envelope에는 시각, 전략 ID, 실행유형, 유니버스, 종목별 `AssetSignal`, 목표 비중, 사유 및 진단을 담습니다. 미사용 필드는 `None` 또는 빈 튜플로 둡니다.
-
-| 실행유형 | 판단 | 미발생·미충족 시 | 주문 시점 |
+| 단계 | 역할 | 입력 → 출력 | 예 |
 |---|---|---|---|
-| `STATE_REBALANCE` | 현재 상태에서 목표 보유·비중 산출 | 목표 비중 0 | 지정 리밸런싱일/정책 충족 시 |
-| `EVENT_LIFECYCLE` | `ENTER`/`EXIT` 순간과 현재 보유 비교 | 수량 유지 | 새 이벤트 발생 시 |
-| `HYBRID` | 상태 조건이 진입을 허용하고 이벤트가 전이 결정 | 수량 유지 | 유효한 이벤트 발생 시 |
+| 유니버스 | UNIVERSE | → `universe` | 구성, 제외 조건, 최소 가격, 조건 필터 |
+| 지표 | INDICATOR | `universe` → `indicator` | 수익률, 이동평균, 가격, 기간 고점, 변동성, RSI (종목·시장 범위) |
+| 점수·조건 | SCORE / CONDITION / LOGIC | `indicator` → `score`·`condition` | 점수화, 점수 합성, 임계·비교 조건, AND/OR/NOT |
+| 선정·이벤트 | SELECTION / EVENT | → `selection`·`event` | 상위 N(보유 유지 버퍼), 상태 전이, 손절·익절, 보유기간 |
+| 비중·제약·목표 | WEIGHTING / CONSTRAINT / TARGET | → `weight` → `target_portfolio` | 동일·점수·역변동성 비중, 상한, 현금, 국면 전환 |
+| 판단·실행 | STRATEGY / EXECUTION | → `strategy_result` → 원장 | `strategy.state`, `strategy.event`, `execution.orders` |
 
-`MULTI_LEG_EVENT`, `EXECUTION_ALGORITHM`, `ANALYSIS_FUNCTION`은 화면용 중앙 메타데이터에 등록했으나 **현재의 단일 종목 참조 실행기에서 수행하지 않습니다**. 그룹 단위 부분체결·집행 스케줄·분석 결과는 별도 계약과 엔진이 필요합니다. 지원하지 않는 유형을 `StrategyResult`로 실행하면 오류가 납니다.
+- `condition`은 **지속 상태의 참·거짓**, `event`는 **그 시점에 발생한 전이**입니다. 이벤트가 없으면 청산이 아니라 `HOLD`입니다.
+- `strategy.state`는 목표 포트폴리오를 받아 매 리밸런스 시점에 맞춥니다. `strategy.event`는 진입·청산 이벤트(여러 개 합침)와 선택 게이트(조건 또는 선정)를 받고, 최대 보유 수로 진입 비중과 빈 자리를 정합니다.
+- 리밸런스 주기, 이탈 허용, 현금 부족 시 처리는 `execution.orders`만 정합니다.
+- 자주 쓰는 조합(모멘텀 점수, 골든크로스, 시장 국면 등 8개)은 블록이 아니라 **프리셋**(저장된 하위 그래프)입니다.
 
-## 기존 코드와 변경 범위
+## 예제
 
-기존 14개 블록 ID, 포트 키, `get_function`, `can_connect`, `validate_graph`는 유지합니다. `momentum.factor`와 팩터 블록의 `score`는 중간 점수이며 최종 전략 결과가 아닙니다. 기존 `momentum.trend`의 `signal`은 상태 조건으로 정의하고, 새로운 `momentum.ma-cross`의 `event`를 교차 순간에 사용합니다. 점수 블록은 종목을 고르거나 비중을 정하지 않습니다. `selection.top-n`이 점수 순으로 선정하고, `allocation.target-weight`는 그 선정 결과만 동일·점수 비례 비중으로 나눕니다. 종목 상한과 현금은 `portfolio.max-weight`, `portfolio.cash`가 따로 적용하고, `portfolio.target`이 주문 수량 없는 목표 포트폴리오를 만듭니다. RSI는 `indicator.rsi`의 지표 값이고, `condition.threshold`가 `RSI < 30` 같은 참·거짓만 만듭니다. `RUN_CONTEXT`의 리밸런싱 주기와 `allocation.rebalance`의 주기가 중복될 수 있으므로 UI에서는 정책 소유자를 하나로 정해야 합니다.
-
-블록에는 `version`, 입력·출력 스키마 버전, 역할, 실행유형, `RequiredData(fields, minimum_history, frequency)`가 추가됐습니다. 데이터 요구 기간은 설정 기간에 따라 늘어날 수 있으므로 실행 시 동적 검증이 필요합니다. `validate_graph`는 필수 포트·타입·중복·순환·파라미터 범위를 검사합니다.
-
-## 단계별 예제
-
-### 상태 평가·리밸런싱
-
-```python
-from datetime import datetime, timezone
-from ai_studio.n07_runtime import UniverseFrame, evaluate_state, generate_orders
-
-t = datetime(2026, 9, 29, 20, tzinfo=timezone.utc)
-u = UniverseFrame(t, ("AAPL", "MSFT"))
-result = evaluate_state("trend", u, {"AAPL": True, "MSFT": False})
-# signals: AAPL REBALANCE/LONG/1.0, MSFT REBALANCE/FLAT/0.0
-orders = generate_orders(result, {}, {"AAPL": 100, "MSFT": 200},
-                         portfolio_value=1000, cash=1000, rebalance_due=True)
-# orders: AAPL BUY 10주. rebalance_due=False이면 주문 없음.
-```
-
-보유 중인 종목이 유니버스에서 제거됐다면 `evaluate_state(..., positions=...)`로 넘깁니다. 청산 목표 0이 결과에 포함됩니다.
-
-### 골든크로스 이벤트
+### 그래프를 만들고 1년 백테스트
 
 ```python
-from ai_studio.n07_runtime import evaluate_events, fill_at_next_open
-from ai_studio.n05_signals import moving_average_cross_events
+from ai_studio import RunSettings, history_from_bars, load_ohlc, run_graph_backtest
+from ai_studio.n12_strategies import EXAMPLES
 
-# MarketBar는 종가 시각(timestamp), 실제 공개 시각(available_at),
-# 다음 봉의 시가 시각(open_at)을 구분합니다.
-crosses = moving_average_cross_events(history, fast_days=20, slow_days=60)
-# 이전 단기평균이 장기 이하고 현재 단기평균이 장기보다 큰 날만 kind가 entry인 행이 생긴다.
-result = evaluate_events("golden_cross", universe, {"AAPL"}, set(), positions)
-# FLAT: ENTER/LONG; 이미 LONG: HOLD/UNCHANGED
-orders = generate_orders(result, positions, reference_prices,
-                         portfolio_value=1000, cash=1000)
-fills, new_positions, cash = fill_at_next_open(orders, next_bars, positions, 1000)
-# 주문은 신호 이후의 명시된 다음 시가 시각에만 체결됩니다.
+history = history_from_bars(load_ohlc())
+name, build = EXAMPLES["momentum-gated-cross"]   # 모멘텀 상위 30 안에서 골든크로스 진입
+book = run_graph_backtest(build(), history, RunSettings(
+    signal_frequency="daily", initial_capital=100_000, fee_rate=0.001, slippage_rate=0.0005,
+))
+print(name, len(book.trade_log), f"{book.portfolio_history[-1].cumulative_return:+.2%}")
 ```
 
-`run_backtest`는 미리 계산한 `StrategyResult`와 시점별 기준가격·다음 거래 봉을 받아 `signal_history`, `trade_log`, `position_history`, `portfolio_history`를 별도로 반환합니다. 신호가 있었으나 현금이 없어 주문하지 못한 경우도 신호 이력에 남습니다. 이벤트 ID와 미체결 주문을 제공하면 반복 주문을 억제합니다.
+`run_graph_backtest`는 거래일마다 현재 보유를 넣어 그래프를 실행하고, 신호는 그날 종가, 체결은 다음 거래일 시가, 평가는 그날 종가로 남깁니다. 결과는 `signal_history`, `trade_log`, `position_history`, `portfolio_history`, `skipped_orders`(체결 못 한 주문)입니다.
+
+### 프리셋으로 직접 조립
+
+```python
+from ai_studio import StrategyEdge, StrategyGraph, StrategyNode, validate_strategy
+from ai_studio.n12_strategies import place
+
+cross = place("golden-cross", "cross", {"universe": ("universe", "universe")},
+              {"fast": {"windowDays": 10}, "slow": {"windowDays": 40}})
+graph = StrategyGraph(
+    (StrategyNode("universe", "universe.compose", {}),) + cross.nodes + (
+        StrategyNode("stop", "event.stop", {"stopLossPct": 8}),
+        StrategyNode("decision", "strategy.event", {"maxPositions": 5}),
+        StrategyNode("orders", "execution.orders", {}),
+    ),
+    cross.edges + (
+        StrategyEdge("universe", "universe", "stop", "universe"),
+        StrategyEdge("universe", "universe", "decision", "universe"),
+        StrategyEdge(*cross.out("entry"), "decision", "entry"),
+        StrategyEdge(*cross.out("exit"), "decision", "exit"),
+        StrategyEdge("stop", "exit", "decision", "exit"),
+        StrategyEdge("decision", "result", "orders", "result"),
+    ),
+)
+print(validate_strategy(graph))   # ConnectResult(ok=True, reason=None, warnings=())
+```
+
+### 한 시점만 실행
+
+```python
+from ai_studio import ExecutionContext, execute, momentum_top10
+
+as_of = max(bar.timestamp for rows in history.values() for bar in rows)
+result = execute(momentum_top10(), ExecutionContext(as_of, history))
+print(result.port("target", "portfolio"))
+print(result.warnings)   # 데이터가 모자라 빈 지표·점수가 있으면 필요한 봉 수와 함께 나온다
+```
+
+## 실행
+
+```bash
+python -m ai_studio.n16_self_check            # 카탈로그·레지스트리·프리셋·예제 정합성
+python -m unittest discover -s tests -v       # 저장된 일봉이 있으면 예제 8개 백테스트 포함
+PYTHONPATH=. .venv/bin/python scripts/run_momentum_backtest.py
+PYTHONPATH=. .venv/bin/python scripts/preview_blocks.py
+
+cd web && npm install && npm run dev          # 편집기. /api/validate·/api/backtest가 Python을 부른다
+```
 
 ## 백테스트 적용 전 점검
 
-이 참조 구현은 시점별 입력을 **호출자가 제공**합니다. 재무자료의 실제 공개시점, 지수 편입 이력, 상장폐지, 거래정지, 분할·배당, 세금, 거래소 캘린더, 부분체결 및 실제 주문 거부를 자동 처리하지 않습니다. 실데이터 어댑터는 `available_at <= 신호 계산 시각`을 보장해야 하며, 수정주가로 만든 신호와 실제 체결가격·수량은 기업행동 처리로 맞춰야 합니다. 기준 종가로 신호를 만든 당일 종가 체결은 허용하지 않습니다. 다음 시가가 예상 가격보다 급변해 현금이 부족하면 참조 체결기는 명확한 오류를 반환합니다. 운영 백테스트에서는 주문 축소·거부 정책과 미체결 상태를 추가해야 합니다.
-
-```bash
-python -m ai_studio.n16_self_check
-python -m unittest discover -s tests -v
-```
+이 참조 구현은 시점별 입력을 호출자가 제공합니다. 재무자료의 실제 공개시점, 지수 편입 이력, 상장폐지, 휴장일, 분할·배당, 세금, 부분체결과 실제 주문 거부를 처리하지 않습니다. 시장 범위 지표는 적재된 종목의 동일가중 합성 지수입니다. 실데이터 어댑터는 `available_at <= 신호 계산 시각`을 보장해야 하고, 수정주가로 만든 신호와 실제 체결가격·수량은 기업행동 처리로 맞춰야 합니다. 신호를 만든 당일 종가 체결은 허용하지 않습니다. 다음 시가가 올라 현금이 모자라면 실행 노드의 `shortfall` 정책에 따라 수량을 줄이거나(기본) 오류를 냅니다.

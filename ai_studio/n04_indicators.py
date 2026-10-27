@@ -38,3 +38,28 @@ def rsi(closes: Sequence[float], period: int = 14) -> float:
         return 100.0
     relative = (gains / period) / (losses / period)
     return 100 - (100 / (1 + relative))
+
+
+def total_return(closes: Sequence[float], lookback: int, skip: int = 0) -> float:
+    """skip개 봉을 뺀 시점의 종가를 그보다 lookback개 앞 종가와 비교한 수익률."""
+    if lookback < 1 or skip < 0:
+        raise ValueError("수익률 기간은 1 이상, 제외 기간은 0 이상이어야 합니다.")
+    end = len(closes) - 1 - skip
+    start = end - lookback
+    if start < 0:
+        raise ValueError("수익률을 계산할 가격이 부족합니다.")
+    return closes[end] / closes[start] - 1
+
+
+def daily_returns(closes: Sequence[float], window: int) -> list[float]:
+    if len(closes) < window + 1:
+        raise ValueError("수익률을 계산할 가격이 부족합니다.")
+    tail = closes[-(window + 1):]
+    return [tail[index] / tail[index - 1] - 1 for index in range(1, len(tail))]
+
+
+def stdev(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        raise ValueError("표준편차에는 값이 두 개 이상 필요합니다.")
+    mean = sum(values) / len(values)
+    return (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5

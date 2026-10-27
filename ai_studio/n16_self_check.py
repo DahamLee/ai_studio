@@ -1,116 +1,67 @@
-from ai_studio.n13_connect import can_connect, validate_graph
-from ai_studio.n10_functions import FUNCTIONS, get_function
+"""카탈로그·레지스트리·프리셋·예제 전략이 서로 맞는지 빠르게 확인한다.
+
+실행: python -m ai_studio.n16_self_check
+"""
+
 from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
+from ai_studio.n10_functions import FUNCTIONS, get_function
+from ai_studio.n11_registry import registered_ids
+from ai_studio.n12_strategies import EXAMPLES, PRESETS, momentum_rebalance, momentum_top10, place
+from ai_studio.n13_connect import can_connect, validate_graph, validate_strategy
+
+
+def _port(function_id: str, key: str, side: str = "outputs"):
+    return next(port for port in getattr(get_function(function_id), side) if port.key == key)
 
 
 def main() -> None:
     ids = [fn.id for fn in FUNCTIONS]
-    if len(ids) != 26:
-        raise SystemExit(f"함수는 26개여야 합니다. 현재 {len(ids)}개")
     if len(set(ids)) != len(ids):
         raise SystemExit("함수 id가 중복되었습니다.")
+    if set(ids) != set(registered_ids()):
+        raise SystemExit(f"카탈로그와 레지스트리가 다릅니다: {sorted(set(ids) ^ set(registered_ids()))}")
+    if any(fn.role in ("ALLOCATION",) for fn in FUNCTIONS):
+        raise SystemExit("ALLOCATION 역할은 WEIGHTING·CONSTRAINT로 나눠야 합니다.")
 
-    compose = get_function("universe.compose")
-    exclude = get_function("universe.exclude")
-    momentum = get_function("momentum.factor")
-    combine = get_function("logic.combine")
+    for preset in PRESETS:
+        placed = place(preset.id, "p", {key: ("u", "universe") for key, _, _ in preset.inputs})
+        graph = StrategyGraph((StrategyNode("u", "universe.compose", {}),) + placed.nodes, placed.edges)
+        check = validate_graph(graph)
+        if not check.ok:
+            raise SystemExit(f"프리셋 {preset.id}: {check.reason}")
 
-    universe_link = can_connect(compose.outputs[0], exclude.inputs[0])
-    if not universe_link.ok:
-        raise SystemExit(universe_link.reason)
+    graphs = [("momentum_rebalance", momentum_rebalance()), ("momentum_top10", momentum_top10())]
+    graphs += [(key, build()) for key, (_, build) in EXAMPLES.items()]
+    for name, graph in graphs:
+        check = validate_strategy(graph)
+        if not check.ok or check.warnings:
+            raise SystemExit(f"{name}: {check.reason or check.warnings}")
 
-    score_into_universe = can_connect(momentum.outputs[0], exclude.inputs[0])
-    if score_into_universe.ok:
-        raise SystemExit("점수는 종목 집합 입력에 연결되면 안 됩니다.")
-
-    mixed = validate_graph(
-        StrategyGraph(
-            nodes=(
-                StrategyNode("u", "universe.compose", {"market": "US_EQUITY"}),
-                StrategyNode("m", "momentum.factor", {}),
-                StrategyNode("t", "momentum.trend", {}),
-                StrategyNode("and", "logic.combine", {"operator": "and"}),
-                StrategyNode("w", "allocation.target-weight", {"scheme": "equal"}),
-            ),
-            edges=(
-                StrategyEdge("u", "universe", "m", "universe"),
-                StrategyEdge("u", "universe", "t", "universe"),
-                StrategyEdge("m", "score", "and", "conditions"),
-                StrategyEdge("t", "condition", "and", "conditions"),
-                StrategyEdge("and", "condition", "w", "selection"),
-            ),
-        )
+    rules = (
+        (("indicator.rsi", "value"), ("condition.threshold", "value"), True),
+        (("score.from-indicator", "score"), ("condition.threshold", "value"), False),
+        (("score.from-indicator", "score"), ("universe.exclude", "universe"), False),
+        (("logic.combine", "condition"), ("allocation.target-weight", "selection"), False),
+        (("selection.condition", "selection"), ("strategy.event", "gate"), True),
+        (("event.transition", "entry"), ("strategy.state", "portfolio"), False),
+        (("portfolio.target", "portfolio"), ("strategy.state", "portfolio"), True),
+        (("strategy.event", "result"), ("execution.orders", "result"), True),
     )
+    for (source_fn, source_key), (target_fn, target_key), expected in rules:
+        result = can_connect(_port(source_fn, source_key), _port(target_fn, target_key, "inputs"))
+        if result.ok is not expected:
+            raise SystemExit(f"{source_fn}.{source_key} → {target_fn}.{target_key} 연결 판정이 틀렸습니다.")
+
+    mixed = validate_graph(StrategyGraph(
+        (StrategyNode("u", "universe.compose", {}), StrategyNode("r", "indicator.return", {}),
+         StrategyNode("s", "score.from-indicator", {}), StrategyNode("and", "logic.combine", {})),
+        (StrategyEdge("u", "universe", "r", "universe"), StrategyEdge("r", "value", "s", "value"),
+         StrategyEdge("s", "score", "and", "conditions"), StrategyEdge("s", "score", "and", "conditions")),
+    ))
     if mixed.ok:
-        raise SystemExit("점수와 조건을 AND로 합치는 그래프는 거부해야 합니다.")
+        raise SystemExit("점수를 조건 조합에 넣는 그래프는 거부해야 합니다.")
 
-    conditions = validate_graph(
-        StrategyGraph(
-            nodes=(
-                StrategyNode("u", "universe.compose", {"market": "US_EQUITY"}),
-                StrategyNode("t", "momentum.trend", {}),
-                StrategyNode("b", "momentum.breakout", {}),
-                StrategyNode("and", "logic.combine", {"operator": "and"}),
-            ),
-            edges=(
-                StrategyEdge("u", "universe", "t", "universe"),
-                StrategyEdge("u", "universe", "b", "universe"),
-                StrategyEdge("t", "condition", "and", "conditions"),
-                StrategyEdge("b", "condition", "and", "conditions"),
-            ),
-        )
-    )
-    if not conditions.ok:
-        raise SystemExit(conditions.reason)
-
-    pipeline = validate_graph(
-        StrategyGraph(
-            nodes=(
-                StrategyNode("u", "universe.compose", {"market": "US_EQUITY"}),
-                StrategyNode("score", "momentum.factor", {}),
-                StrategyNode("pick", "selection.top-n", {"topN": 20}),
-                StrategyNode("weight", "allocation.target-weight", {"scheme": "equal"}),
-                StrategyNode("cap", "portfolio.max-weight", {"maxWeightPct": 10}),
-                StrategyNode("cash", "portfolio.cash", {"cashWeightPct": 5}),
-                StrategyNode("target", "portfolio.target", {}),
-            ),
-            edges=(
-                StrategyEdge("u", "universe", "score", "universe"),
-                StrategyEdge("score", "score", "pick", "score"),
-                StrategyEdge("pick", "selection", "weight", "selection"),
-                StrategyEdge("weight", "weight", "cap", "weight"),
-                StrategyEdge("cap", "weight", "cash", "weight"),
-                StrategyEdge("cash", "weight", "target", "weight"),
-            ),
-        )
-    )
-    if not pipeline.ok:
-        raise SystemExit(pipeline.reason)
-
-    condition = get_function("logic.combine").outputs[0]
-    weighting = get_function("allocation.target-weight").inputs[0]
-    if can_connect(condition, weighting).ok:
-        raise SystemExit("조건은 비중 블록에 바로 연결되면 안 됩니다.")
-    rsi = get_function("indicator.rsi").outputs[0]
-    threshold = get_function("condition.threshold").inputs[0]
-    if not can_connect(rsi, threshold).ok:
-        raise SystemExit("RSI 지표는 임계 조건에 연결되어야 합니다.")
-    if can_connect(momentum.outputs[0], threshold).ok:
-        raise SystemExit("점수는 조건 비교 입력에 연결되면 안 됩니다.")
-
-    if combine.inputs[0].min_connections != 2:
-        raise SystemExit("복수 조건 조합은 조건 2개 이상을 요구해야 합니다.")
-
-    event = get_function("momentum.ma-cross")
-    strategy = get_function("strategy.event")
-    if can_connect(compose.outputs[0], strategy.inputs[0]).ok is False:
-        raise SystemExit("유니버스 출력은 전략 입력과 연결되어야 합니다.")
-    if can_connect(momentum.outputs[0], strategy.inputs[1]).ok:
-        raise SystemExit("점수는 이벤트 입력에 연결되면 안 됩니다.")
-    if not can_connect(event.outputs[0], strategy.inputs[1]).ok:
-        raise SystemExit("교차 이벤트를 이벤트 전략에 연결할 수 있어야 합니다.")
-
-    print(f"ok {len(FUNCTIONS)} functions")
+    print(f"ok {len(FUNCTIONS)} functions, {len(PRESETS)} presets, {len(EXAMPLES)} examples")
 
 
 if __name__ == "__main__":
