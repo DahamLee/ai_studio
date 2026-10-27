@@ -12,10 +12,10 @@ type CanvasNode = {
 
 type PortRef = { node: string; port: string };
 
-const NODE_W = 196;
+const NODE_W = 176;
 const NODE_H = 88;
 const X0 = 24;
-const COL_GAP = 40;
+const COL_GAP = 20;
 const BAND_MIN = 132;
 const BAND_HEAD = 30;
 
@@ -41,13 +41,21 @@ function homeY(index: number, bandH: number) {
   return index * bandH + BAND_HEAD + Math.max(0, room / 2);
 }
 
+/** 포트는 위(입력)·아래(출력) 가장자리에 놓인다. 노드 왼쪽 끝에서의 거리. */
 function portOffset(index: number, count: number) {
-  if (count <= 1) return NODE_H / 2;
-  return 18 + (index * (NODE_H - 36)) / (count - 1);
+  if (count <= 1) return NODE_W / 2;
+  return 28 + (index * (NODE_W - 56)) / (count - 1);
 }
 
+/** 아래 출력에서 위 입력으로 내려가는 선. */
 function curve(x1: number, y1: number, x2: number, y2: number) {
-  const bend = Math.max(36, Math.abs(x2 - x1) / 2);
+  const bend = Math.max(40, Math.abs(y2 - y1) / 2);
+  return `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
+}
+
+/** 같은 띠 안의 선은 옆 노드로 가로로 잇는다. */
+function sideways(x1: number, y1: number, x2: number, y2: number) {
+  const bend = Math.max(24, Math.abs(x2 - x1) / 2);
   return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
 }
 
@@ -198,7 +206,7 @@ export function App() {
       instanceId: id,
       functionId: fn.id,
       params: { ...fn.instance.params },
-      x: x == null ? X0 + count * (NODE_W + 36) : Math.max(X0, x),
+      x: x == null ? X0 + count * (NODE_W + COL_GAP) : Math.max(X0, x),
       y: y == null ? homeY(index, bandRef.current) : clampY(index, y, bandRef.current),
     };
   }
@@ -218,10 +226,18 @@ export function App() {
     const fn = byId.get(functionId) ?? catalog?.functions.find((item) => item.id === functionId);
     if (!fn) return;
     const used = new Set(nodes.map((node) => node.instanceId));
-    const node = placeAt(fn, nodes, nextInstanceId(baseId(fn.id), used), x, y);
-    const list = [...nodes, node];
-    setNodes(list);
-    setEdges((current) => [...current, ...suggestEdges(node, list, current)]);
+    let node = placeAt(fn, nodes, nextInstanceId(baseId(fn.id), used), x, y);
+    const suggested = suggestEdges(node, [...nodes, node], edges);
+    if (x == null) {
+      // 다른 띠의 앞 노드와 이어지면 그 바로 아래에 놓는다. 그 자리가 차 있으면 기본 위치를 쓴다.
+      const band = indexOf(fn.id);
+      const above = suggested.map((edge) => nodes.find((item) => item.instanceId === edge.from))
+        .find((item) => item && indexOf(item.functionId) < band);
+      const free = above && !nodes.some((item) => indexOf(item.functionId) === band && Math.abs(item.x - above.x) < NODE_W);
+      if (above && free) node = { ...node, x: above.x };
+    }
+    setNodes([...nodes, node]);
+    setEdges((current) => [...current, ...suggested]);
     setSelectedId(node.instanceId);
   }
 
@@ -297,7 +313,7 @@ export function App() {
       return;
     }
     if (!pending) {
-      setWall("먼저 이어 줄 출력 포트(오른쪽 파란 점)를 누르세요.");
+      setWall("먼저 이어 줄 출력 포트(노드 아래 파란 점)를 누르세요.");
       return;
     }
     const sourceFn = fnOfNode(pending.node);
@@ -328,7 +344,7 @@ export function App() {
 
   const selected = nodes.find((node) => node.instanceId === selectedId) ?? null;
   const selectedFn = selected ? byId.get(selected.functionId) : null;
-  const boardWidth = Math.max(720, ...nodes.map((node) => node.x + NODE_W + 80));
+  const boardWidth = Math.max(720, ...nodes.map((node) => node.x + NODE_W + X0));
   const boardHeight = bandH * Math.max(stages.length, 1);
 
   function onBoardDrop(event: React.DragEvent) {
@@ -396,7 +412,7 @@ export function App() {
           <p className="eyebrow">워크플로우로 만들기</p>
           <h1>전략 캔버스</h1>
         </div>
-        <p>선은 바로 다음 단계로만 이어집니다(점선은 단계를 건너뛰는 보조 입력). 출력 포트(파란 점)를 누른 뒤 입력 포트를 누르면 이어지고, 선을 누르면 끊깁니다.</p>
+        <p>선은 바로 다음 단계로만 이어집니다(점선은 단계를 건너뛰는 보조 입력). 노드 아래 파란 점(출력)을 누른 뒤 다른 노드 위 점(입력)을 누르면 이어지고, 선을 누르면 끊깁니다.</p>
         <button type="button" className="tool" onClick={() => setNodes((current) => arrange(current, edges))}>자동 정렬</button>
         <p className={`check ${status.tone}`} role="status" title={check?.warnings.join("\n")}>{status.text}</p>
         {wall ? <p className="wall-note" role="alert">{wall}</p> : null}
@@ -528,8 +544,10 @@ export function App() {
                   if (!from || !to || !fromFn || !toFn) return null;
                   const outIndex = fromFn.outputs.findIndex((port) => port.key === edge.fromPort);
                   const inIndex = toFn.inputs.findIndex((port) => port.key === edge.toPort);
-                  const d = curve(from.x + NODE_W, from.y + portOffset(outIndex, fromFn.outputs.length),
-                                  to.x, to.y + portOffset(inIndex, toFn.inputs.length));
+                  const d = stageIndex(stages, fromFn) === stageIndex(stages, toFn)
+                    ? sideways(from.x + NODE_W, from.y + NODE_H / 2, to.x, to.y + NODE_H / 2)
+                    : curve(from.x + portOffset(outIndex, fromFn.outputs.length), from.y + NODE_H,
+                            to.x + portOffset(inIndex, toFn.inputs.length), to.y);
                   const auxiliary = toFn.inputs[inIndex]?.auxiliary ?? false;
                   return (
                     <path
@@ -566,7 +584,6 @@ export function App() {
                       <button type="button" aria-label={`${fn.name} 빼기`} onClick={() => removeNode(node.instanceId)}>×</button>
                     </div>
                     <div className="cn-v">{node.instanceId}</div>
-                    <div className="cn-f">{stages[stageIndex(stages, fn)]?.label}</div>
                     <Ports
                       ports={fn.outputs}
                       side="out"
@@ -768,7 +785,7 @@ function Ports({ ports, side, pending, onPick }: {
           className={["cport", side, pending === port.key ? "pending" : "", port.required ? "" : "optional"].filter(Boolean).join(" ")}
           title={`${port.label} · ${port.key} · ${acceptedTypes(port).join(", ")}${port.required ? "" : " (선택)"}`}
           aria-label={`${port.label} ${side === "in" ? "입력" : "출력"}`}
-          style={{ top: portOffset(index, ports.length) }}
+          style={{ left: portOffset(index, ports.length) }}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); onPick(port); }}
         />

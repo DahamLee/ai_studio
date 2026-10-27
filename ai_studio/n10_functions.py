@@ -257,8 +257,8 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         params=(), role="SELECTION",
     ),
     FunctionSpec(
-        id="event.transition", name="진입·청산 신호 잡기", category="event", category_label="이벤트",
-        summary="조건이 전 거래일 거짓에서 오늘 참이 되면 진입, 참에서 거짓이 되면 청산 이벤트를 낸다.",
+        id="event.transition", name="진입·청산 시점 잡기", category="event", category_label="이벤트",
+        summary="조건이 전 거래일 거짓에서 오늘 참이 되면 진입, 참에서 거짓이 되면 청산 신호를 낸다. 보유·현금은 보지 않고 시점만 알린다. 실제로 살지 팔지는 주문하기 단계가 정한다.",
         inputs=(_CONDITION_IN,),
         outputs=(
             PortSpec("entry", "진입", "event", "거짓 → 참이 된 시점.", True),
@@ -267,8 +267,8 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         params=(), role="EVENT", needs_previous=True,
     ),
     FunctionSpec(
-        id="event.stop", name="손절·익절하기", category="event", category_label="이벤트",
-        summary="보유 종목이 평균진입가(또는 진입 후 고점) 대비 손절선 아래이거나 익절선 위면 청산 이벤트를 낸다. 보유 종목만 보므로 입력이 없다.",
+        id="event.stop", name="손절·익절 시점 잡기", category="event", category_label="이벤트",
+        summary="보유 종목이 평균진입가(또는 진입 후 고점) 대비 손절선 아래이거나 익절선 위로 가면 청산 신호를 낸다. 보유 종목만 보므로 입력이 없다.",
         inputs=(),
         outputs=(PortSpec("exit", "청산", "event", "손절 또는 익절 시점.", True),),
         params=(
@@ -280,8 +280,8 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         role="EVENT", required_data=RequiredData(("high", "close"), 1, "1d"),
     ),
     FunctionSpec(
-        id="event.holding-period", name="보유기간 지나면 팔기", category="event", category_label="이벤트",
-        summary="진입 후 거래일 수가 기준 이상이면 청산 이벤트를 낸다. 보유 종목만 보므로 입력이 없다.",
+        id="event.holding-period", name="보유기간 만료 시점 잡기", category="event", category_label="이벤트",
+        summary="진입 후 거래일 수가 기준 이상이 되면 청산 신호를 낸다. 보유 종목만 보므로 입력이 없다.",
         inputs=(),
         outputs=(PortSpec("exit", "청산", "event", "보유기간이 찬 시점.", True),),
         params=(ParamSpec("maxDays", "보유 기간", "integer", "이 거래일 수가 지나면 청산.", 20, min=1, unit="일"),),
@@ -313,8 +313,8 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="WEIGHTING",
     ),
     FunctionSpec(
-        id="allocation.event-slots", name="보유 자리 나누기", category="allocation", category_label="비중",
-        summary="진입·청산 신호를 모으고, 최대 보유 수로 한 종목 비중(1/최대 보유 수)과 빈 자리를 정한다. 게이트를 주면 게이트를 통과한 종목만 진입한다.",
+        id="allocation.event-slots", name="최대 보유 수로 비중 정하기", category="allocation", category_label="비중",
+        summary="신호 전략의 비중 규칙. 최대 보유 수가 N이면 한 종목 비중은 1/N이고, N종목이 다 차 있으면 새로 사지 않는다. 진입·청산 신호를 모으고, 게이트를 주면 게이트를 통과한 종목만 진입 후보가 된다.",
         inputs=(
             PortSpec("entry", "진입 신호", "event", "진입 발생 시점. 여러 개를 연결하면 합친다.", True,
                      multiple=True, min_connections=1),
@@ -381,7 +381,7 @@ _DECISION_AND_EXECUTION: tuple[FunctionSpec, ...] = (
     FunctionSpec(
         id="strategy.event", name="신호대로 사고팔기", category="strategy", category_label="전략 판단",
         summary="진입·청산 계획과 현재 보유를 비교해 한 번의 전이만 발생시킨다. 청산이 진입보다 우선한다.",
-        inputs=(PortSpec("plan", "진입·청산 계획", "event_plan", "보유 자리 나누기의 결과.", True),),
+        inputs=(PortSpec("plan", "진입·청산 계획", "event_plan", "최대 보유 수로 비중 정하기의 결과.", True),),
         outputs=(_RESULT_OUT,), params=(),
         role="STRATEGY", strategy_execution_type="EVENT_LIFECYCLE",
     ),

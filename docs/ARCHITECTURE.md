@@ -74,15 +74,15 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 3 평가하기 | SCORE | `score.from-indicator` 점수 매기기, `score.combine` 점수 합치기 |
 | | CONDITION | `condition.threshold` 기준값과 비교하기, `condition.compare` 두 지표 비교하기 |
 | | LOGIC | `logic.combine` 조건 묶기, `logic.not` 조건 뒤집기, `logic.if-else` 조건에 따라 나누기 |
-| 4 매매 대상 정하기 | SELECTION | `selection.top-n` 상위 N개 고르기(대상 조건, 보유 유지 버퍼), `selection.threshold` 점수 기준으로 고르기, `selection.condition` 조건 맞는 종목 고르기 |
-| | EVENT | `event.transition` 진입·청산 신호 잡기, `event.stop` 손절·익절하기, `event.holding-period` 보유기간 지나면 팔기 (뒤 둘은 보유 종목만 보므로 입력 없음) |
-| 5 비중 정하기 | WEIGHTING | `allocation.target-weight` 비중 나누기, `allocation.indicator-weight` 지표로 비중 나누기, `allocation.event-slots` 보유 자리 나누기(진입·청산 신호, 게이트, 최대 보유 수 → `event_plan`) |
+| 4 매매 대상·시점 정하기 | SELECTION | `selection.top-n` 상위 N개 고르기(대상 조건, 보유 유지 버퍼), `selection.threshold` 점수 기준으로 고르기, `selection.condition` 조건 맞는 종목 고르기 |
+| | EVENT | `event.transition` 진입·청산 시점 잡기, `event.stop` 손절·익절 시점 잡기, `event.holding-period` 보유기간 만료 시점 잡기 (뒤 둘은 보유 종목만 보므로 입력 없음) |
+| 5 비중 정하기 | WEIGHTING | `allocation.target-weight` 비중 나누기, `allocation.indicator-weight` 지표로 비중 나누기, `allocation.event-slots` 최대 보유 수로 비중 정하기(진입·청산 신호, 게이트, 최대 보유 수 → `event_plan`) |
 | | CONSTRAINT | `portfolio.max-weight` 비중 상한 두기, `portfolio.cash` 현금 남기기, `portfolio.risk-off` 국면 따라 줄이기 |
 | | TARGET | `portfolio.target` 목표 포트폴리오 만들기 |
 | 6 주문하기 | STRATEGY | `strategy.state` 목표 비중 맞추기(← 목표 포트폴리오), `strategy.event` 신호대로 사고팔기(← 진입·청산 계획) |
 | | EXECUTION | `execution.orders` 주문 내기(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
 
-**선 규칙** (`n13.check_stage_order`, 편집기 `stageOrderProblem`): 선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 앞 단계에서만 받는다. 보조 입력(`PortSpec.auxiliary`)만 단계를 건너뛴다 — 국면 따라 줄이기의 투자 조건(3→5), 지표로 비중 나누기의 지표(2→5), 보유 자리 나누기의 게이트. 편집기는 보조 입력 선을 점선으로 그린다. 판단 노드는 유니버스를 받지 않고, 앞 단계 데이터(목표 종목·신호 종목)와 현재 보유로 판단 대상을 정한다.
+**선 규칙** (`n13.check_stage_order`, 편집기 `stageOrderProblem`): 선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 앞 단계에서만 받는다. 보조 입력(`PortSpec.auxiliary`)만 단계를 건너뛴다 — 국면 따라 줄이기의 투자 조건(3→5), 지표로 비중 나누기의 지표(2→5), 최대 보유 수로 비중 정하기의 게이트. 편집기는 보조 입력 선을 점선으로 그린다. 판단 노드는 유니버스를 받지 않고, 앞 단계 데이터(목표 종목·신호 종목)와 현재 보유로 판단 대상을 정한다.
 
 \* 재무 데이터가 없어 실행하면 오류를 낸다.
 
@@ -95,7 +95,8 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 - 카탈로그의 `stages`로 띠 6개를 만들고, 블록은 `stage`(역할에서 파생) 띠 안에서만 움직인다.
 - 선은 상태로 들고 있다. 블록을 놓으면 단계 규칙에 맞는 앞 노드와 한 번 이어 주고, 이후에는 출력 포트 → 입력 포트 클릭으로 잇고 선 클릭으로 끊는다. 단계를 거스르거나 건너뛰는 선은 이유와 함께 거절한다.
 - 프리셋 추가, 예제 불러오기, 개발 서버 `/api/validate`를 통한 Python 검증(연결 오류 / 완성 전 / 실행 가능 + 경고).
-- 자동 정렬: 띠마다 한 줄로 놓고, 노드 열을 `max(앞 노드 열 + 1, 같은 띠의 앞 열 + 1)`로 정해 모든 선이 왼쪽에서 오른쪽으로 간다. 예제·프리셋을 놓을 때와 상단 버튼에서 쓴다.
+- 흐름은 위에서 아래다. 입력 포트는 노드 위, 출력 포트는 노드 아래에 있고, 다른 단계로 가는 선은 아래로 내려간다. 같은 단계 안의 선(예: 종목 불러오기 → 투자 제외하기)은 옆으로 잇는다.
+- 자동 정렬: 띠마다 한 줄로 놓고, 노드를 앞 단계 노드의 바로 아래 열에 둔다. 같은 단계의 앞 노드보다는 오른쪽에 두고, 열이 차 있으면 오른쪽 빈 열로 민다. 예제·프리셋을 놓을 때와 상단 버튼에서 쓴다. 노드를 하나 추가하면 이어진 앞 노드 바로 아래에 놓는다.
 - 파라미터 편집: 오른쪽 패널에서 선택한 노드의 파라미터를 타입(number·integer·enum·boolean·date)에 맞는 입력으로 바꾼다. 왼쪽 실행 조건도 카탈로그의 `runContext`로 그린다(날짜를 비우면 저장된 일봉 전체).
 - 백테스트 실행: 실행 가능한 그래프일 때만 켜지고 `/api/backtest`로 돌린 결과를 오른쪽 패널에 보인다. 실행 뒤 그래프를 바꾸면 결과가 이전 그래프 기준임을 표시한다.
 
@@ -217,4 +218,4 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 3 | 판단 통합, 손절·리밸런스 이동, 복합 블록 → 프리셋 | `965af23` |
 | 4 | 커버리지 테스트, 현금 부족 정책 | `eebbdb3` |
 | 5 | 캔버스 단계 띠·명시적 선·Python 검증 | `1fd5310` |
-| 6 | "○○하기" 이름, 단계 순서 선 규칙, 보유 자리 나누기 노드, `universe.filter`·`logic.set-op` 제거 | 이번 커밋 |
+| 6 | "○○하기" 이름, 단계 순서 선 규칙, 최대 보유 수로 비중 정하기 노드, `universe.filter`·`logic.set-op` 제거 | 이번 커밋 |

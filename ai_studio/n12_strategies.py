@@ -306,7 +306,7 @@ def example_market_regime() -> StrategyGraph:
 
 def _event_tail(entries: tuple[tuple[str, str], ...], exits: tuple[tuple[str, str], ...], *, max_positions: int = 10,
                 gate: tuple[str, str] | None = None) -> tuple[tuple[StrategyNode, ...], tuple[StrategyEdge, ...]]:
-    """신호 → 보유 자리 나누기 → 이벤트 판단 → 실행."""
+    """신호 → 최대 보유 수로 비중 정하기 → 이벤트 판단 → 실행."""
     edges = tuple(StrategyEdge(*source, "slots", "entry") for source in entries)
     edges += tuple(StrategyEdge(*source, "slots", "exit") for source in exits)
     if gate is not None:
