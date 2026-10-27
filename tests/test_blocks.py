@@ -9,7 +9,6 @@ from ai_studio.n08_blocks import (
     min_price_universe,
     if_else_score,
     rsi_indicator,
-    set_operation,
 )
 from ai_studio.n01_frames import MarketBar, ScoreFrame, ScoreRow, SelectionFrame, SelectionRow, ConditionFrame, ConditionRow, WeightFrame, WeightRow
 from ai_studio.n03_market_data import daily_bar, history_from_bars, session_close as at
@@ -64,7 +63,6 @@ class BlockTests(unittest.TestCase):
             ConditionFrame((ConditionRow("AAPL", False), ConditionRow("MSFT", True))),
         )
         self.assertEqual(merged.matches(), {"AAPL": False, "MSFT": True})
-        self.assertEqual(set_operation({"A", "B"}, {"B", "C"}, "intersect"), ("B",))
         chosen = if_else_score(
             ConditionFrame((ConditionRow("AAPL", True), ConditionRow("MSFT", False))),
             ScoreFrame((ScoreRow("AAPL", 1), ScoreRow("MSFT", 1))),

@@ -12,6 +12,8 @@ export type Port = {
   sameTypeAs: string | null;
   /** 출력 타입이 이 입력 포트에 연결된 타입을 따른다. */
   mirrors: string | null;
+  /** 보조 입력. 주 입력은 같은 단계나 바로 앞 단계에서만 받지만, 보조 입력은 앞 단계 어디서든 받는다. */
+  auxiliary: boolean;
 };
 
 export type Param = {

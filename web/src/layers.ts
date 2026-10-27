@@ -7,6 +7,19 @@ export function stageIndex(stages: Stage[], fn: BlockFunction | undefined) {
   return index === -1 ? 0 : index;
 }
 
+/** 선의 단계 규칙. Python check_stage_order와 같다. 통과하면 null, 아니면 사용자에게 보일 이유. */
+export function stageOrderProblem(stages: Stage[], from: BlockFunction, to: BlockFunction, port: Port): string | null {
+  const source = stageIndex(stages, from);
+  const target = stageIndex(stages, to);
+  if (target < source) {
+    return `${to.name}(${stages[target]?.label})은 뒤 단계인 ${from.name}(${stages[source]?.label})에서 받을 수 없습니다.`;
+  }
+  if (target - source > 1 && !port.auxiliary) {
+    return `${to.name}의 ${port.label}은 바로 앞 단계에서만 받습니다. ${from.name}(${stages[source]?.label})은 단계를 건너뜁니다.`;
+  }
+  return null;
+}
+
 export function acceptedTypes(port: Port) {
   return port.accepts.length ? port.accepts : [port.type];
 }

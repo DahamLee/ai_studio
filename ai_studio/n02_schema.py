@@ -6,7 +6,7 @@ from typing import Literal
 
 PortType = Literal[
     "universe", "condition", "event", "indicator", "score", "selection",
-    "weight", "target_portfolio", "strategy_result",
+    "weight", "event_plan", "target_portfolio", "strategy_result",
 ]
 ParamType = Literal["number", "integer", "enum", "boolean", "date"]
 FunctionCategory = Literal[
@@ -30,12 +30,12 @@ EXECUTION_TYPE_METADATA: dict[str, dict[str, str]] = {
 
 # 캔버스의 단계 띠. 블록은 role로 자기 단계가 정해진다. 팩터·시그널 갈래가 같은 띠를 공유한다.
 STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("universe", "유니버스", ("UNIVERSE",)),
-    ("indicator", "지표", ("INDICATOR",)),
-    ("judge", "점수·조건", ("SCORE", "CONDITION", "LOGIC")),
-    ("pick", "선정·이벤트", ("SELECTION", "EVENT")),
-    ("weight", "비중·제약·목표", ("WEIGHTING", "CONSTRAINT", "TARGET")),
-    ("decide", "판단·실행", ("STRATEGY", "EXECUTION")),
+    ("universe", "종목 고르기", ("UNIVERSE",)),
+    ("indicator", "지표 계산하기", ("INDICATOR",)),
+    ("judge", "평가하기", ("SCORE", "CONDITION", "LOGIC")),
+    ("pick", "매매 대상 정하기", ("SELECTION", "EVENT")),
+    ("weight", "비중 정하기", ("WEIGHTING", "CONSTRAINT", "TARGET")),
+    ("decide", "주문하기", ("STRATEGY", "EXECUTION")),
 )
 
 
@@ -54,6 +54,7 @@ PORT_TYPE_LABEL: dict[str, str] = {
     "score": "종목 점수",
     "selection": "선정 종목",
     "weight": "배분 비중",
+    "event_plan": "진입·청산 계획",
     "target_portfolio": "목표 포트폴리오",
     "strategy_result": "전략 판단 결과",
 }
@@ -102,6 +103,9 @@ class PortSpec:
     min_connections: int | None = None
     same_type_as: str | None = None
     mirrors: str | None = None
+    # 보조 입력. 주 흐름은 같은 단계나 바로 다음 단계에서만 받지만, 보조 입력은 앞 단계 어디서든 받는다.
+    # 예: 국면 전환의 시장 조건(평가하기 → 비중 정하기), 역변동성 비중의 변동성(지표 → 비중).
+    auxiliary: bool = False
 
 
 @dataclass(frozen=True, slots=True)

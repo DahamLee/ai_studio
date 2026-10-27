@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, TypeVar
 
 from ai_studio.n01_frames import (
-    ConditionFrame, EventFrame, IndicatorFrame, ScoreFrame, SelectionFrame, TargetPortfolio, UniverseFrame,
+    ConditionFrame, EventFrame, EventPlan, IndicatorFrame, ScoreFrame, SelectionFrame, TargetPortfolio, UniverseFrame,
     WeightFrame,
 )
 from ai_studio.n03_market_data import session_date
@@ -22,10 +22,10 @@ from ai_studio.n06_portfolio import (
 )
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 from ai_studio.n08_blocks import (
-    allocate_target_weight, combine_conditions, compose_universe, exclude_universe, filter_universe,
+    allocate_target_weight, combine_conditions, compose_universe, eligible_scores, exclude_universe,
     high_indicator, holding_period_exit_events, if_else_condition, if_else_score, min_price_universe,
-    moving_average_indicator, price_indicator, return_indicator, rsi_indicator, set_condition_operation,
-    set_operation, stop_exit_events, volatility_indicator,
+    moving_average_indicator, price_indicator, return_indicator, rsi_indicator, stop_exit_events,
+    volatility_indicator,
 )
 from ai_studio.n10_functions import get_function
 
@@ -96,11 +96,6 @@ def _min_price(inputs: Inputs, params: Params, context: ExecutionContext) -> dic
                                            min_close=float(params["minClose"]))}  # type: ignore[arg-type]
 
 
-def _filter(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    return {"universe": filter_universe(_expect(inputs, "universe", UniverseFrame),
-                                        _expect(inputs, "condition", ConditionFrame))}
-
-
 # ── 지표 ──────────────────────────────────────────────────────
 
 
@@ -166,23 +161,14 @@ def _if_else(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[
     raise ValueError("IF의 두 분기는 같은 종류의 점수 또는 조건이어야 합니다.")
 
 
-def _set_op(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    left, right = inputs["left"], inputs["right"]
-    operator = str(params["operator"])
-    if isinstance(left, UniverseFrame) and isinstance(right, UniverseFrame):
-        if left.as_of != right.as_of:
-            raise ValueError("집합 연산의 두 유니버스는 기준 시각이 같아야 합니다.")
-        return {"result": UniverseFrame(left.as_of, set_operation(set(left.symbols), set(right.symbols), operator))}
-    if isinstance(left, ConditionFrame) and isinstance(right, ConditionFrame):
-        return {"result": set_condition_operation(left, right, operator)}
-    raise ValueError("집합 연산은 유니버스 또는 조건 프레임만 받습니다.")
-
-
 # ── 선정·이벤트 ───────────────────────────────────────────────
 
 
 def _top_n(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     scores = _expect(inputs, "score", ScoreFrame)
+    eligible = inputs.get("eligible")
+    if eligible is not None:
+        scores = eligible_scores(scores, _expect(inputs, "eligible", ConditionFrame))
     top_n, buffer = int(params["topN"]), int(params["bufferN"])  # type: ignore[arg-type]
     if buffer == 0:
         return {"selection": select_top_n(scores, top_n)}
@@ -208,7 +194,6 @@ def _transition(inputs: Inputs, params: Params, context: ExecutionContext) -> di
 
 
 def _stop(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    _expect(inputs, "universe", UniverseFrame)
     return {"exit": stop_exit_events(
         context.history, context.positions, context.as_of,
         stop_loss_pct=float(params["stopLossPct"]),  # type: ignore[arg-type]
@@ -218,7 +203,6 @@ def _stop(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str
 
 
 def _holding_period(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    _expect(inputs, "universe", UniverseFrame)
     return {"exit": holding_period_exit_events(context.history, context.positions, context.as_of,
                                                max_days=int(params["maxDays"]))}  # type: ignore[arg-type]
 
@@ -233,6 +217,24 @@ def _target_weight(inputs: Inputs, params: Params, context: ExecutionContext) ->
 def _indicator_weight(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     return {"weight": weight_by_indicator(_expect(inputs, "selection", SelectionFrame),
                                           _expect(inputs, "value", IndicatorFrame), str(params["direction"]))}
+
+
+def _event_slots(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    gate = inputs.get("gate")
+    eligible: tuple[str, ...] | None = None
+    priority: tuple[str, ...] = ()
+    if isinstance(gate, ConditionFrame):
+        eligible = tuple(symbol for symbol, matched in gate.matches().items() if matched)
+    elif isinstance(gate, SelectionFrame):
+        priority = tuple(row.instrument_id for row in sorted(gate.rows, key=lambda row: row.rank))
+        eligible = priority
+    elif gate is not None:
+        raise ValueError("진입 게이트는 조건 또는 선정 결과여야 합니다.")
+    return {"plan": EventPlan(
+        tuple(sorted(_event_union(inputs["entry"], context.as_of))),
+        tuple(sorted(_event_union(inputs["exit"], context.as_of))),
+        int(params["maxPositions"]), eligible, priority,  # type: ignore[arg-type]
+    )}
 
 
 def _max_weight(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
@@ -258,28 +260,22 @@ def _portfolio(inputs: Inputs, params: Params, context: ExecutionContext) -> dic
 
 
 def _state(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    universe = _expect(inputs, "universe", UniverseFrame)
+    # 유니버스는 앞 단계 데이터에 이미 반영돼 있다. 판단 대상은 목표 종목과 현재 보유 종목이다.
     portfolio = _expect(inputs, "portfolio", TargetPortfolio)
     targets = {row.instrument_id: row.target_weight for row in portfolio.positions}
+    universe = UniverseFrame(context.as_of, tuple(sorted(set(targets) | _held(context))))
     return {"result": evaluate_state("state", universe, targets, positions=context.positions)}
 
 
 def _event(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    universe = _expect(inputs, "universe", UniverseFrame)
-    gate = inputs.get("gate")
-    eligible: dict[str, bool] | None = None
-    priority: tuple[str, ...] | None = None
-    if isinstance(gate, ConditionFrame):
-        eligible = gate.matches()
-    elif isinstance(gate, SelectionFrame):
-        priority = tuple(row.instrument_id for row in sorted(gate.rows, key=lambda row: row.rank))
-        eligible = {symbol: True for symbol in priority}
-    elif gate is not None:
-        raise ValueError("진입 게이트는 조건 또는 선정 결과여야 합니다.")
+    plan = _expect(inputs, "plan", EventPlan)
+    # 판단 대상은 신호가 난 종목, 게이트 통과 종목, 현재 보유 종목이다.
+    symbols = set(plan.entries) | set(plan.exits) | set(plan.eligible or ()) | _held(context)
+    universe = UniverseFrame(context.as_of, tuple(sorted(symbols)))
+    eligible = None if plan.eligible is None else dict.fromkeys(plan.eligible, True)
     return {"result": evaluate_events(
-        "event", universe, _event_union(inputs["entry"], context.as_of), _event_union(inputs["exit"], context.as_of),
-        context.positions, eligible=eligible, max_positions=int(params["maxPositions"]),  # type: ignore[arg-type]
-        priority=priority,
+        "event", universe, set(plan.entries), set(plan.exits), context.positions,
+        eligible=eligible, max_positions=plan.max_positions, priority=plan.priority or None,
     )}
 
 
@@ -306,7 +302,6 @@ def register_builtin_handlers() -> None:
         ("universe.compose", _compose),
         ("universe.exclude", _exclude),
         ("universe.min-price", _min_price),
-        ("universe.filter", _filter),
         ("indicator.return", _indicator(return_indicator, lookback_days=("lookbackDays", int), skip_days=("skipDays", int))),
         ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int))),
         ("indicator.price", _indicator(price_indicator, field=("field", str))),
@@ -321,7 +316,6 @@ def register_builtin_handlers() -> None:
         ("logic.combine", _combine),
         ("logic.not", _not),
         ("logic.if-else", _if_else),
-        ("logic.set-op", _set_op),
         ("selection.top-n", _top_n),
         ("selection.threshold", _min_score),
         ("selection.condition", _select_condition),
@@ -330,6 +324,7 @@ def register_builtin_handlers() -> None:
         ("event.holding-period", _holding_period),
         ("allocation.target-weight", _target_weight),
         ("allocation.indicator-weight", _indicator_weight),
+        ("allocation.event-slots", _event_slots),
         ("portfolio.max-weight", _max_weight),
         ("portfolio.cash", _cash),
         ("portfolio.risk-off", _risk_off),

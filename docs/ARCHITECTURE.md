@@ -1,6 +1,6 @@
 # AI STUDIO 코드 구조 명세
 
-> 기준: `refactor/unified-pipeline` 브랜치 (2026-10-23). 테스트 71개 통과, `python -m ai_studio.n16_self_check` 통과.
+> 기준: `refactor/unified-pipeline` 브랜치 (2026-10-28). 테스트 75개 통과, `python -m ai_studio.n16_self_check` 통과.
 > 처음 진단한 구조와 개선 과정은 5장, 목표 구조와 완료 기준은 6장에 있다.
 
 ## 1. 개요
@@ -10,7 +10,7 @@
 ```
 ai-studio/
 ├── ai_studio/          # 핵심 패키지 (n01 ~ n17, 약 3,750줄)
-├── tests/              # unittest 71개
+├── tests/              # unittest 75개
 ├── scripts/            # 데이터 수집, 실행 예제
 ├── notebooks/          # 01 전체 흐름, 02 종목 하나
 ├── data/sp500_ohlc_1y.csv   # S&P 500 503종목 × 251거래일 일봉
@@ -32,7 +32,7 @@ n15.run_graph_backtest(graph, history, RunSettings)
              │  위상 정렬 → n11 핸들러 → n08 블록 / n04 지표 / n05 조건·이벤트 / n06 점수·선정·비중
              │  UNIVERSE → INDICATOR → SCORE·CONDITION → SELECTION·EVENT → WEIGHT·CONSTRAINT → TARGET
              ▼
-          STRATEGY(strategy.state | strategy.event) → StrategyResult
+          STRATEGY(strategy.state ← target_portfolio | strategy.event ← event_plan) → StrategyResult
              ▼
           EXECUTION(execution.orders 정책) → n09.Ledger.step → n07.generate_orders → fill_at_next_open
       ▼
@@ -52,10 +52,10 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n05_signals` | 조건·이벤트 | `compare_threshold`, `compare_indicators`(MARKET 펼침), `negate`, `transition_events` |
 | `n06_portfolio` | 점수 이후 단계 | `score_from_indicator`(raw·rank·zscore), `combine_scores`, `select_top_n(_with_buffer)`, `select_min_score`, `select_matched`, `weight_equal/by_score/by_indicator`, `cap_max_weight`, `apply_cash_weight`, `scale_when_false`, `to_target_portfolio` |
 | `n07_runtime` | 판단·주문·체결 | `AssetSignal`, `StrategyResult`, `PositionState`, `evaluate_state(targets)`, `evaluate_events(max_positions, priority)`, `generate_orders`, `fill_at_next_open(shortfall)` |
-| `n08_blocks` | 시세 기반 블록 | 유니버스(compose·exclude·min-price·filter), 지표(return·moving-average·price·high·volatility·rsi, `scope`), `market_series`(동일가중 합성 지수), 손절·보유기간 청산 이벤트, 논리 연산 |
+| `n08_blocks` | 시세 기반 블록 | 유니버스(compose·exclude·min-price), 지표(return·moving-average·price·high·volatility·rsi, `scope`), `market_series`(동일가중 합성 지수), 손절·보유기간 청산 이벤트, 논리 연산 |
 | `n09_backtest` | 원장 | `Ledger.step/mark/result`, `run_backtest`(미리 계산한 판단용), `trade_rows`, `write_trades_csv` |
-| `n10_functions` | 블록 카탈로그 34개 | 단계별 정의, `get_function`, `function_catalog()` |
-| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 34개 |
+| `n10_functions` | 블록 카탈로그 33개 | 단계별 정의, `get_function`, `function_catalog()` |
+| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 33개 |
 | `n12_strategies` | 프리셋·예제 | `PRESETS` 8개, `place()`, 예제 전략 `EXAMPLES` 8개, `graph_dict/graph_from_dict` |
 | `n13_connect` | 연결 검사 | `can_connect`, `validate_graph`, `validate_strategy`(실행 노드 1개·닿지 않는 블록 경고), `check_editor_graph` |
 | `n14_engine` | 그래프 실행기 | `ExecutionContext`, `execute`(직전 거래일 상류 재실행, 빈 결과 경고), `execution_order` |
@@ -63,22 +63,26 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n16_self_check` | 정합성 점검 | 카탈로그=레지스트리, 프리셋·예제 유효성, 핵심 연결 규칙 |
 | `n17_editor_api` | 편집기 진입점 | 표준입력 그래프 JSON → 검증 결과 JSON, `backtest` 인자면 백테스트 요약(수익률·낙폭·평가액 추이·최근 체결) |
 
-### 3.1 블록 (34개)
+### 3.1 블록 (33개)
 
-| 단계 | 역할 | 블록 |
+캔버스에 보이는 이름은 "○○하기" 형태다. 단계 이름도 같은 형태로 `n02.STAGES`에 있다.
+
+| 단계 | 역할 | 블록 (화면 이름) |
 |---|---|---|
-| 유니버스 | UNIVERSE | `universe.compose`, `universe.exclude`, `universe.min-price`, `universe.filter` |
-| 지표 | INDICATOR | `indicator.return`, `.moving-average`, `.price`, `.high`, `.volatility`, `.rsi`, `.fundamental`* |
-| 점수·조건 | SCORE | `score.from-indicator`, `score.combine` |
-| | CONDITION | `condition.threshold`, `condition.compare` |
-| | LOGIC | `logic.combine`, `logic.not`, `logic.if-else`, `logic.set-op` |
-| 선정·이벤트 | SELECTION | `selection.top-n`(보유 유지 버퍼), `selection.threshold`, `selection.condition` |
-| | EVENT | `event.transition`, `event.stop`, `event.holding-period` |
-| 비중·제약·목표 | WEIGHTING | `allocation.target-weight`, `allocation.indicator-weight` |
-| | CONSTRAINT | `portfolio.max-weight`, `portfolio.cash`, `portfolio.risk-off` |
-| | TARGET | `portfolio.target` |
-| 판단·실행 | STRATEGY | `strategy.state`(목표 포트폴리오 입력), `strategy.event`(진입·청산 다중 입력, 선택 게이트, 최대 보유 수) |
-| | EXECUTION | `execution.orders`(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
+| 1 종목 고르기 | UNIVERSE | `universe.compose` 종목 불러오기, `universe.exclude` 투자 제외하기, `universe.min-price` 저가주 빼기 |
+| 2 지표 계산하기 | INDICATOR | `indicator.return` 수익률 구하기, `.moving-average` 이동평균 구하기, `.price` 가격 가져오기, `.high` 기간 고점 구하기, `.volatility` 변동성 구하기, `.rsi` RSI 구하기, `.fundamental` 재무 지표 가져오기* |
+| 3 평가하기 | SCORE | `score.from-indicator` 점수 매기기, `score.combine` 점수 합치기 |
+| | CONDITION | `condition.threshold` 기준값과 비교하기, `condition.compare` 두 지표 비교하기 |
+| | LOGIC | `logic.combine` 조건 묶기, `logic.not` 조건 뒤집기, `logic.if-else` 조건에 따라 나누기 |
+| 4 매매 대상 정하기 | SELECTION | `selection.top-n` 상위 N개 고르기(대상 조건, 보유 유지 버퍼), `selection.threshold` 점수 기준으로 고르기, `selection.condition` 조건 맞는 종목 고르기 |
+| | EVENT | `event.transition` 진입·청산 신호 잡기, `event.stop` 손절·익절하기, `event.holding-period` 보유기간 지나면 팔기 (뒤 둘은 보유 종목만 보므로 입력 없음) |
+| 5 비중 정하기 | WEIGHTING | `allocation.target-weight` 비중 나누기, `allocation.indicator-weight` 지표로 비중 나누기, `allocation.event-slots` 보유 자리 나누기(진입·청산 신호, 게이트, 최대 보유 수 → `event_plan`) |
+| | CONSTRAINT | `portfolio.max-weight` 비중 상한 두기, `portfolio.cash` 현금 남기기, `portfolio.risk-off` 국면 따라 줄이기 |
+| | TARGET | `portfolio.target` 목표 포트폴리오 만들기 |
+| 6 주문하기 | STRATEGY | `strategy.state` 목표 비중 맞추기(← 목표 포트폴리오), `strategy.event` 신호대로 사고팔기(← 진입·청산 계획) |
+| | EXECUTION | `execution.orders` 주문 내기(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
+
+**선 규칙** (`n13.check_stage_order`, 편집기 `stageOrderProblem`): 선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 앞 단계에서만 받는다. 보조 입력(`PortSpec.auxiliary`)만 단계를 건너뛴다 — 국면 따라 줄이기의 투자 조건(3→5), 지표로 비중 나누기의 지표(2→5), 보유 자리 나누기의 게이트. 편집기는 보조 입력 선을 점선으로 그린다. 판단 노드는 유니버스를 받지 않고, 앞 단계 데이터(목표 종목·신호 종목)와 현재 보유로 판단 대상을 정한다.
 
 \* 재무 데이터가 없어 실행하면 오류를 낸다.
 
@@ -89,7 +93,7 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 ### 3.3 웹 편집기
 
 - 카탈로그의 `stages`로 띠 6개를 만들고, 블록은 `stage`(역할에서 파생) 띠 안에서만 움직인다.
-- 선은 상태로 들고 있다. 블록을 놓으면 맞는 앞 노드와 한 번 이어 주고, 이후에는 출력 포트 → 입력 포트 클릭으로 잇고 선 클릭으로 끊는다.
+- 선은 상태로 들고 있다. 블록을 놓으면 단계 규칙에 맞는 앞 노드와 한 번 이어 주고, 이후에는 출력 포트 → 입력 포트 클릭으로 잇고 선 클릭으로 끊는다. 단계를 거스르거나 건너뛰는 선은 이유와 함께 거절한다.
 - 프리셋 추가, 예제 불러오기, 개발 서버 `/api/validate`를 통한 Python 검증(연결 오류 / 완성 전 / 실행 가능 + 경고).
 - 자동 정렬: 띠마다 한 줄로 놓고, 노드 열을 `max(앞 노드 열 + 1, 같은 띠의 앞 열 + 1)`로 정해 모든 선이 왼쪽에서 오른쪽으로 간다. 예제·프리셋을 놓을 때와 상단 버튼에서 쓴다.
 - 파라미터 편집: 오른쪽 패널에서 선택한 노드의 파라미터를 타입(number·integer·enum·boolean·date)에 맞는 입력으로 바꾼다. 왼쪽 실행 조건도 카탈로그의 `runContext`로 그린다(날짜를 비우면 저장된 일봉 전체).
@@ -174,16 +178,16 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 단계 | 역할 | 입력 → 출력 | 노드 |
 |---|---|---|---|
 | 0 | 실행 조건 (노드 아님) | — | 기간, 평가 주기, 자금, 비용 |
-| 1 | UNIVERSE | universe → universe | compose, exclude, min-price, filter |
+| 1 | UNIVERSE | universe → universe | compose, exclude, min-price |
 | 2 | INDICATOR | universe → indicator | return, moving-average, price, high, volatility, rsi, fundamental (종목·시장 범위) |
 | 3a | SCORE | indicator → score | from-indicator(방향·백분위·표준점수), combine |
-| 3b | CONDITION·LOGIC | indicator → condition | threshold, compare, combine, not, if-else, set-op |
+| 3b | CONDITION·LOGIC | indicator → condition | threshold, compare, combine, not, if-else |
 | 4a | SELECTION | score·condition → selection | top-n(보유 유지 버퍼), threshold, condition |
 | 4b | EVENT | condition·보유 → event | transition, stop(손절·익절·트레일링), holding-period |
-| 5 | WEIGHTING | selection → weight | target-weight(동일·점수), indicator-weight(역변동성) |
+| 5 | WEIGHTING | selection → weight, event → event_plan | target-weight(동일·점수), indicator-weight(역변동성), event-slots(최대 보유 수·게이트) |
 | 6 | CONSTRAINT | weight → weight | max-weight, cash, risk-off(국면 전환) |
 | 7 | TARGET | weight → target_portfolio | portfolio.target |
-| 8 | DECISION | → strategy_result | state(target_portfolio), event(진입·청산 + 게이트 + 최대 보유 수) |
+| 8 | DECISION | → strategy_result | state(target_portfolio), event(event_plan) |
 | 9 | EXECUTION | strategy_result → 원장 | execution.orders |
 
 ### 6.4 완료 기준 (커버리지 테스트) — 모두 통과
@@ -195,11 +199,11 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 모멘텀 상위 10, 월간 리밸런싱 | 1 → 2 → 3a → 4a → 5 → 6 → 7 → 8(state) → 9 | +44.30% |
 | 모멘텀 + 저변동성 합성 점수 | 2 ×2 → 3a(백분위 ×2, 합성) → 4a → … | −10.52% |
 | 상위 N + 보유 유지 버퍼 | … → 4a(top-n, buffer) → … | +47.80% (체결 100건, 버퍼 없으면 109건) |
-| 추세 필터 후 팩터 선정 | 2 → 3b → 1(filter) → 2 → 3a → … | +37.04% |
+| 추세 필터 후 팩터 선정 | 2 → 3b(추세) + 3a(모멘텀) → 4a(top-n, 대상 조건) → … | +37.04% |
 | 시장이 이동평균 아래면 현금 | … → 6(risk-off ← 시장 지표 → 3b) → 7 → … | −1.79% |
-| RSI < 30 진입, 손절·익절·보유기간 | 2 → 3b → 4b(전이) + 4b(손절) + 4b(보유기간) → 8(event) → 9 | −8.28% |
-| 골든크로스 / 데드크로스 | 2 ×2 → 3b(비교) → 4b(전이) → 8(event) → 9 | +10.75% |
-| 상위 N 중 골든크로스만 진입 | 4a를 게이트로 + 4b → 8(event) → 9 | +7.93% |
+| RSI < 30 진입, 손절·익절·보유기간 | 2 → 3b → 4b(전이) + 4b(손절) + 4b(보유기간) → 5(보유 자리) → 8(event) → 9 | −8.28% |
+| 골든크로스 / 데드크로스 | 2 ×2 → 3b(비교) → 4b(전이) → 5(보유 자리) → 8(event) → 9 | +10.75% |
+| 상위 N 중 골든크로스만 진입 | 4a를 게이트로 + 4b → 5(보유 자리) → 8(event) → 9 | +7.93% |
 
 \* 2025-09-30 ~ 2026-09-29, 초기 10만 달러, 수수료 0.1%, 슬리피지 0.05%, 매일 평가. 기간이 1년이라 비교용 수치일 뿐이다.
 
@@ -213,3 +217,4 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 3 | 판단 통합, 손절·리밸런스 이동, 복합 블록 → 프리셋 | `965af23` |
 | 4 | 커버리지 테스트, 현금 부족 정책 | `eebbdb3` |
 | 5 | 캔버스 단계 띠·명시적 선·Python 검증 | `1fd5310` |
+| 6 | "○○하기" 이름, 단계 순서 선 규칙, 보유 자리 나누기 노드, `universe.filter`·`logic.set-op` 제거 | 이번 커밋 |

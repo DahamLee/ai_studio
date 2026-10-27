@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { acceptedTypes, layoutColumns, resolveOutputType, stageIndex } from "./layers";
+import { acceptedTypes, layoutColumns, resolveOutputType, stageIndex, stageOrderProblem } from "./layers";
 import type { BacktestReport, BlockFunction, Catalog, GraphCheck, GraphEdge, Param, ParamValue, Port, Preset, Stage } from "./types";
 
 type CanvasNode = {
@@ -177,7 +177,8 @@ export function App() {
       let got = 0;
       for (const source of upstream) {
         const sourceFn = byId.get(source.functionId);
-        const output = sourceFn?.outputs.find((port) => {
+        if (!sourceFn || stageOrderProblem(stages, sourceFn, spec, input)) continue;
+        const output = sourceFn.outputs.find((port) => {
           const type = outputType(source.instanceId, port, edgeList, list);
           return type !== null && acceptedTypes(input).includes(type);
         });
@@ -311,6 +312,12 @@ export function App() {
       setWall(`${port.label}은 ${acceptedTypes(port).join(", ")}만 받습니다. ${sourcePort.label}은 ${type ?? "미정"}입니다.`);
       return;
     }
+    const targetFn = fnOfNode(node.instanceId);
+    const problem = targetFn ? stageOrderProblem(stages, sourceFn, targetFn, port) : null;
+    if (problem) {
+      setWall(problem);
+      return;
+    }
     const edge = { from: pending.node, fromPort: pending.port, to: node.instanceId, toPort: port.key };
     setEdges((current) => {
       const kept = port.multiple ? current : current.filter((item) => !(item.to === node.instanceId && item.toPort === port.key));
@@ -389,7 +396,7 @@ export function App() {
           <p className="eyebrow">워크플로우로 만들기</p>
           <h1>전략 캔버스</h1>
         </div>
-        <p>팩터와 시그널 갈래가 같은 단계 띠를 씁니다. 출력 포트(파란 점)를 누른 뒤 입력 포트를 누르면 이어지고, 선을 누르면 끊깁니다.</p>
+        <p>선은 바로 다음 단계로만 이어집니다(점선은 단계를 건너뛰는 보조 입력). 출력 포트(파란 점)를 누른 뒤 입력 포트를 누르면 이어지고, 선을 누르면 끊깁니다.</p>
         <button type="button" className="tool" onClick={() => setNodes((current) => arrange(current, edges))}>자동 정렬</button>
         <p className={`check ${status.tone}`} role="status" title={check?.warnings.join("\n")}>{status.text}</p>
         {wall ? <p className="wall-note" role="alert">{wall}</p> : null}
@@ -523,14 +530,16 @@ export function App() {
                   const inIndex = toFn.inputs.findIndex((port) => port.key === edge.toPort);
                   const d = curve(from.x + NODE_W, from.y + portOffset(outIndex, fromFn.outputs.length),
                                   to.x, to.y + portOffset(inIndex, toFn.inputs.length));
+                  const auxiliary = toFn.inputs[inIndex]?.auxiliary ?? false;
                   return (
                     <path
                       key={edgeKey(edge)}
+                      className={auxiliary ? "aux" : undefined}
                       d={d}
                       markerEnd="url(#arrow)"
                       onClick={() => setEdges((current) => current.filter((item) => edgeKey(item) !== edgeKey(edge)))}
                     >
-                      <title>{`${edge.from}.${edge.fromPort} → ${edge.to}.${edge.toPort} (눌러서 끊기)`}</title>
+                      <title>{`${edge.from}.${edge.fromPort} → ${edge.to}.${edge.toPort}${auxiliary ? " · 보조 입력" : ""} (눌러서 끊기)`}</title>
                     </path>
                   );
                 })}
@@ -557,7 +566,7 @@ export function App() {
                       <button type="button" aria-label={`${fn.name} 빼기`} onClick={() => removeNode(node.instanceId)}>×</button>
                     </div>
                     <div className="cn-v">{node.instanceId}</div>
-                    <div className="cn-f">{fn.categoryLabel}</div>
+                    <div className="cn-f">{stages[stageIndex(stages, fn)]?.label}</div>
                     <Ports
                       ports={fn.outputs}
                       side="out"
@@ -607,7 +616,7 @@ export function App() {
                   return (
                     <li key={port.key}>
                       <code>{port.key}</code>
-                      <span className="muted">{acceptedTypes(port).join("·")}{port.required ? "" : " (선택)"}</span>
+                      <span className="muted">{acceptedTypes(port).join("·")}{port.required ? "" : " (선택)"}{port.auxiliary ? " · 보조" : ""}</span>
                       <span>{linked.length ? linked.map((edge) => `${edge.from}.${edge.fromPort}`).join(", ") : "—"}</span>
                     </li>
                   );

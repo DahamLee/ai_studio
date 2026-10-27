@@ -16,7 +16,7 @@ from ai_studio.n06_portfolio import (
 )
 from ai_studio.n07_runtime import PositionState
 from ai_studio.n08_blocks import (
-    filter_universe, holding_period_exit_events, market_series, stop_exit_events,
+    eligible_scores, holding_period_exit_events, market_series, stop_exit_events,
 )
 from ai_studio.n12_strategies import place
 from ai_studio.n14_engine import ExecutionContext, execute
@@ -149,8 +149,10 @@ class AtomicTests(unittest.TestCase):
     def test_condition_selection_filter_and_inverse_weight(self):
         condition = ConditionFrame((ConditionRow("B", True), ConditionRow("A", True), ConditionRow("C", False)))
         self.assertEqual([r.instrument_id for r in select_matched(condition).rows], ["A", "B"])
-        universe = UniverseFrame(at("2026-01-02"), ("A", "B", "C"))
-        self.assertEqual(filter_universe(universe, condition).symbols, ("A", "B"))
+        scores = ScoreFrame((ScoreRow("A", 1), ScoreRow("B", 2), ScoreRow("C", 3)))
+        self.assertEqual([r.instrument_id for r in eligible_scores(scores, condition).rows], ["A", "B"])
+        market_off = ConditionFrame((ConditionRow("MARKET", False),))
+        self.assertEqual(eligible_scores(scores, market_off).rows, ())
         weights = weight_by_indicator(SelectionFrame((SelectionRow("A", 1), SelectionRow("B", 2))),
                                       IndicatorFrame((IndicatorRow("A", 0.1), IndicatorRow("B", 0.3))))
         self.assertAlmostEqual(dict((r.instrument_id, r.weight) for r in weights.rows)["A"], 0.75)

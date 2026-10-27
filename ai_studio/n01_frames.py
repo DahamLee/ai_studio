@@ -147,6 +147,24 @@ class EventFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class EventPlan:
+    """이벤트 갈래의 비중 단계 결과. 이번 평가일에 진입·청산할 종목과 보유 자리 규칙.
+
+    eligible이 None이면 게이트가 없어 모든 진입 종목이 들어올 수 있다. priority는 자리가 모자랄 때의 순서다.
+    """
+
+    entries: tuple[str, ...]
+    exits: tuple[str, ...]
+    max_positions: int
+    eligible: tuple[str, ...] | None = None
+    priority: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.max_positions < 1:
+            raise StrategyValidationError("최대 보유 수는 1 이상이어야 합니다.")
+
+
+@dataclass(frozen=True, slots=True)
 class SelectionRow:
     instrument_id: str
     rank: int

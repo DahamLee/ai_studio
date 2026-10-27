@@ -147,12 +147,12 @@ def preset_catalog() -> list[dict[str, object]]:
     ]
 
 
-def _state_tail(universe: tuple[str, str], weight: tuple[str, str], rebalance: str) -> tuple[tuple[StrategyNode, ...], tuple[StrategyEdge, ...]]:
+def _state_tail(weight: tuple[str, str], rebalance: str) -> tuple[tuple[StrategyNode, ...], tuple[StrategyEdge, ...]]:
     """비중 → 목표 → 상태 판단 → 실행."""
     return (
         (_n("target", "portfolio.target"), _n("decision", "strategy.state"),
          _n("orders", "execution.orders", rebalanceFrequency=rebalance)),
-        (StrategyEdge(*weight, "target", "weight"), StrategyEdge(*universe, "decision", "universe"),
+        (StrategyEdge(*weight, "target", "weight"),
          _e("target", "portfolio", "decision", "portfolio"), _e("decision", "result", "orders", "result")),
     )
 
@@ -169,7 +169,7 @@ def momentum_rebalance(
     score = place("momentum-score", "mom", {"universe": ("universe", "universe")}, {"ret": {
         "lookbackDays": lookback_months * TRADING_DAYS_PER_MONTH, "skipDays": skip_months * TRADING_DAYS_PER_MONTH,
     }})
-    tail_nodes, tail_edges = _state_tail(("universe", "universe"), ("cash", "weight"), rebalance)
+    tail_nodes, tail_edges = _state_tail(("cash", "weight"), rebalance)
     return StrategyGraph(
         (_n("universe", "universe.compose", market="US_EQUITY", benchmark="SPX"),) + score.nodes + (
             _n("pick", "selection.top-n", topN=top_n),
@@ -188,7 +188,7 @@ def momentum_top10() -> StrategyGraph:
     """S&P 500에서 최근 1개월을 뺀 6개월 모멘텀 상위 10종목을 동일 비중으로 담는다."""
     score = place("momentum-score", "mom", {"universe": ("filter", "universe")},
                   {"ret": {"lookbackDays": 6 * TRADING_DAYS_PER_MONTH, "skipDays": TRADING_DAYS_PER_MONTH}})
-    tail_nodes, tail_edges = _state_tail(("filter", "universe"), ("cash", "weight"), "monthly")
+    tail_nodes, tail_edges = _state_tail(("cash", "weight"), "monthly")
     return StrategyGraph(
         (
             _n("universe", "universe.compose", market="US_EQUITY", benchmark="SPX"),
@@ -229,7 +229,7 @@ def _momentum(prefix: str, universe: tuple[str, str], months: int = 3) -> Placed
 
 
 def _factor_strategy(score: tuple[str, str], *, top_n: int = 10, buffer: int = 0, cash_pct: float = 0,
-                     universe: tuple[str, str] = _U, extra_nodes=(), extra_edges=(),
+                     extra_nodes=(), extra_edges=(),
                      weight_override: tuple[str, str] | None = None) -> tuple[tuple[StrategyNode, ...], tuple[StrategyEdge, ...]]:
     """점수 → 상위 N → 동일 비중 → 현금 → (추가 제약) → 목표 → 상태 판단 → 실행."""
     nodes = (
@@ -242,7 +242,7 @@ def _factor_strategy(score: tuple[str, str], *, top_n: int = 10, buffer: int = 0
         _e("pick", "selection", "weight", "selection"),
         _e("weight", "weight", "cash", "weight"),
     ) + tuple(extra_edges)
-    tail_nodes, tail_edges = _state_tail(universe, weight_override or ("cash", "weight"), "monthly")
+    tail_nodes, tail_edges = _state_tail(weight_override or ("cash", "weight"), "monthly")
     return nodes + tail_nodes, edges + tail_edges
 
 
@@ -281,14 +281,13 @@ def example_hold_buffer() -> StrategyGraph:
 
 
 def example_trend_filtered_factor() -> StrategyGraph:
-    """종가가 50일선 위인 종목만 남긴 뒤 모멘텀 상위 10."""
+    """종가가 50일선 위인 종목 안에서 모멘텀 상위 10."""
     trend = place("trend-filter", "trend", {"universe": _U}, {"ma": {"windowDays": 50}})
-    gate = (_n("trending", "universe.filter"),)
-    gate_edges = (StrategyEdge(*_U, "trending", "universe"), StrategyEdge(*trend.out("condition"), "trending", "condition"))
-    score = _momentum("mom", ("trending", "universe"))
-    nodes, edges = _factor_strategy(score.out("score"), cash_pct=5, universe=("trending", "universe"))
-    return StrategyGraph(_universe() + trend.nodes + gate + score.nodes + nodes,
-                         _UNIVERSE_EDGES + trend.edges + gate_edges + score.edges + edges)
+    score = _momentum("mom", _U)
+    nodes, edges = _factor_strategy(score.out("score"), cash_pct=5,
+                                    extra_edges=(StrategyEdge(*trend.out("condition"), "pick", "eligible"),))
+    return StrategyGraph(_universe() + trend.nodes + score.nodes + nodes,
+                         _UNIVERSE_EDGES + trend.edges + score.edges + edges)
 
 
 def example_market_regime() -> StrategyGraph:
@@ -307,14 +306,15 @@ def example_market_regime() -> StrategyGraph:
 
 def _event_tail(entries: tuple[tuple[str, str], ...], exits: tuple[tuple[str, str], ...], *, max_positions: int = 10,
                 gate: tuple[str, str] | None = None) -> tuple[tuple[StrategyNode, ...], tuple[StrategyEdge, ...]]:
-    edges = (StrategyEdge(*_U, "decision", "universe"),)
-    edges += tuple(StrategyEdge(*source, "decision", "entry") for source in entries)
-    edges += tuple(StrategyEdge(*source, "decision", "exit") for source in exits)
+    """신호 → 보유 자리 나누기 → 이벤트 판단 → 실행."""
+    edges = tuple(StrategyEdge(*source, "slots", "entry") for source in entries)
+    edges += tuple(StrategyEdge(*source, "slots", "exit") for source in exits)
     if gate is not None:
-        edges += (StrategyEdge(*gate, "decision", "gate"),)
+        edges += (StrategyEdge(*gate, "slots", "gate"),)
     return (
-        (_n("decision", "strategy.event", maxPositions=max_positions), _n("orders", "execution.orders")),
-        edges + (_e("decision", "result", "orders", "result"),),
+        (_n("slots", "allocation.event-slots", maxPositions=max_positions),
+         _n("decision", "strategy.event"), _n("orders", "execution.orders")),
+        edges + (_e("slots", "plan", "decision", "plan"), _e("decision", "result", "orders", "result")),
     )
 
 
@@ -326,11 +326,7 @@ def example_rsi_reversal() -> StrategyGraph:
         _n("stop", "event.stop", stopLossPct=10, takeProfitPct=15),
         _n("aged", "event.holding-period", maxDays=20),
     )
-    edges = (
-        StrategyEdge(*oversold.out("condition"), "enter", "condition"),
-        StrategyEdge(*_U, "stop", "universe"),
-        StrategyEdge(*_U, "aged", "universe"),
-    )
+    edges = (StrategyEdge(*oversold.out("condition"), "enter", "condition"),)
     tail_nodes, tail_edges = _event_tail((("enter", "entry"),), (("stop", "exit"), ("aged", "exit")))
     return StrategyGraph(_universe() + oversold.nodes + nodes + tail_nodes,
                          _UNIVERSE_EDGES + oversold.edges + edges + tail_edges)
@@ -348,7 +344,7 @@ def example_momentum_gated_cross() -> StrategyGraph:
     score = _momentum("mom", _U)
     cross = place("golden-cross", "cross", {"universe": _U})
     nodes = (_n("leaders", "selection.top-n", topN=30), _n("stop", "event.stop", stopLossPct=10))
-    edges = (StrategyEdge(*score.out("score"), "leaders", "score"), StrategyEdge(*_U, "stop", "universe"))
+    edges = (StrategyEdge(*score.out("score"), "leaders", "score"),)
     tail_nodes, tail_edges = _event_tail((cross.out("entry"),), (cross.out("exit"), ("stop", "exit")),
                                          gate=("leaders", "selection"))
     return StrategyGraph(_universe() + score.nodes + cross.nodes + nodes + tail_nodes,

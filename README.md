@@ -4,19 +4,20 @@
 
 ## 파이프라인
 
-블록은 역할 하나만 가지고, 역할이 캔버스 단계를 정합니다. 팩터 갈래와 시그널 갈래가 같은 단계를 쓰고, 둘 다 전략 판단 → 주문 실행으로 끝납니다.
+블록은 역할 하나만 가지고, 역할이 캔버스 단계를 정합니다. 팩터 갈래와 시그널 갈래가 같은 단계를 쓰고, 둘 다 판단 → 주문으로 끝납니다.
 
 | 단계 | 역할 | 입력 → 출력 | 예 |
 |---|---|---|---|
-| 유니버스 | UNIVERSE | → `universe` | 구성, 제외 조건, 최소 가격, 조건 필터 |
-| 지표 | INDICATOR | `universe` → `indicator` | 수익률, 이동평균, 가격, 기간 고점, 변동성, RSI (종목·시장 범위) |
-| 점수·조건 | SCORE / CONDITION / LOGIC | `indicator` → `score`·`condition` | 점수화, 점수 합성, 임계·비교 조건, AND/OR/NOT |
-| 선정·이벤트 | SELECTION / EVENT | → `selection`·`event` | 상위 N(보유 유지 버퍼), 상태 전이, 손절·익절, 보유기간 |
-| 비중·제약·목표 | WEIGHTING / CONSTRAINT / TARGET | → `weight` → `target_portfolio` | 동일·점수·역변동성 비중, 상한, 현금, 국면 전환 |
-| 판단·실행 | STRATEGY / EXECUTION | → `strategy_result` → 원장 | `strategy.state`, `strategy.event`, `execution.orders` |
+| 1 종목 고르기 | UNIVERSE | → `universe` | 종목 불러오기, 투자 제외하기, 저가주 빼기 |
+| 2 지표 계산하기 | INDICATOR | `universe` → `indicator` | 수익률·이동평균·가격·기간 고점·변동성·RSI 구하기 (종목·시장 범위) |
+| 3 평가하기 | SCORE / CONDITION / LOGIC | `indicator` → `score`·`condition` | 점수 매기기·합치기, 기준값·두 지표 비교하기, 조건 묶기·뒤집기 |
+| 4 매매 대상 정하기 | SELECTION / EVENT | → `selection`·`event` | 상위 N개 고르기(대상 조건, 보유 유지 버퍼), 진입·청산 신호 잡기, 손절·익절하기, 보유기간 지나면 팔기 |
+| 5 비중 정하기 | WEIGHTING / CONSTRAINT / TARGET | → `weight` → `target_portfolio`, → `event_plan` | 비중 나누기, 보유 자리 나누기, 비중 상한 두기, 현금 남기기, 국면 따라 줄이기 |
+| 6 주문하기 | STRATEGY / EXECUTION | → `strategy_result` → 원장 | 목표 비중 맞추기, 신호대로 사고팔기, 주문 내기 |
 
+- **선은 순서대로만 이어집니다.** 주 입력은 같은 단계나 바로 앞 단계에서만 받고, 뒤 단계에서 앞 단계로는 이을 수 없습니다. 보조 입력(국면 따라 줄이기의 투자 조건, 지표로 비중 나누기의 지표, 보유 자리 나누기의 게이트)만 단계를 건너뜁니다. 판단 노드는 유니버스를 직접 받지 않습니다.
 - `condition`은 **지속 상태의 참·거짓**, `event`는 **그 시점에 발생한 전이**입니다. 이벤트가 없으면 청산이 아니라 `HOLD`입니다.
-- `strategy.state`는 목표 포트폴리오를 받아 매 리밸런스 시점에 맞춥니다. `strategy.event`는 진입·청산 이벤트(여러 개 합침)와 선택 게이트(조건 또는 선정)를 받고, 최대 보유 수로 진입 비중과 빈 자리를 정합니다.
+- 팩터 갈래는 목표 포트폴리오 → `strategy.state`(목표 비중 맞추기), 시그널 갈래는 진입·청산 신호 → `allocation.event-slots`(보유 자리 나누기: 최대 보유 수, 게이트) → `strategy.event`(신호대로 사고팔기)로 갑니다.
 - 리밸런스 주기, 이탈 허용, 현금 부족 시 처리는 `execution.orders`만 정합니다.
 - 자주 쓰는 조합(모멘텀 점수, 골든크로스, 시장 국면 등 8개)은 블록이 아니라 **프리셋**(저장된 하위 그래프)입니다.
 
@@ -48,16 +49,16 @@ cross = place("golden-cross", "cross", {"universe": ("universe", "universe")},
               {"fast": {"windowDays": 10}, "slow": {"windowDays": 40}})
 graph = StrategyGraph(
     (StrategyNode("universe", "universe.compose", {}),) + cross.nodes + (
-        StrategyNode("stop", "event.stop", {"stopLossPct": 8}),
-        StrategyNode("decision", "strategy.event", {"maxPositions": 5}),
+        StrategyNode("stop", "event.stop", {"stopLossPct": 8}),            # 보유 종목만 보므로 입력이 없다
+        StrategyNode("slots", "allocation.event-slots", {"maxPositions": 5}),
+        StrategyNode("decision", "strategy.event", {}),
         StrategyNode("orders", "execution.orders", {}),
     ),
     cross.edges + (
-        StrategyEdge("universe", "universe", "stop", "universe"),
-        StrategyEdge("universe", "universe", "decision", "universe"),
-        StrategyEdge(*cross.out("entry"), "decision", "entry"),
-        StrategyEdge(*cross.out("exit"), "decision", "exit"),
-        StrategyEdge("stop", "exit", "decision", "exit"),
+        StrategyEdge(*cross.out("entry"), "slots", "entry"),
+        StrategyEdge(*cross.out("exit"), "slots", "exit"),
+        StrategyEdge("stop", "exit", "slots", "exit"),
+        StrategyEdge("slots", "plan", "decision", "plan"),
         StrategyEdge("decision", "result", "orders", "result"),
     ),
 )

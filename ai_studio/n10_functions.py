@@ -46,7 +46,7 @@ def _indicator(id: str, name: str, summary: str, params: tuple[ParamSpec, ...], 
 
 _UNIVERSE: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="universe.compose", name="유니버스 구성", category="universe", category_label="유니버스",
+        id="universe.compose", name="종목 불러오기", category="universe", category_label="유니버스",
         summary="시장과 지수, 규모 조건으로 투자 대상 종목 집합을 만든다. 기준일에 아직 상장하지 않은 종목은 넣지 않는다.",
         inputs=(), outputs=(_UNIVERSE_OUT,),
         params=(
@@ -62,7 +62,7 @@ _UNIVERSE: tuple[FunctionSpec, ...] = (
         role="UNIVERSE",
     ),
     FunctionSpec(
-        id="universe.exclude", name="투자 제외 조건", category="universe", category_label="유니버스",
+        id="universe.exclude", name="투자 제외하기", category="universe", category_label="유니버스",
         summary="종목 집합에서 거래 불가·저유동성·상장 초기 종목을 걸러 낸다.",
         inputs=(_UNIVERSE_IN,), outputs=(_UNIVERSE_OUT,),
         params=(
@@ -79,23 +79,18 @@ _UNIVERSE: tuple[FunctionSpec, ...] = (
         lookback=lambda p: int(p["minListingDays"]),
     ),
     FunctionSpec(
-        id="universe.min-price", name="최소 가격", category="universe", category_label="유니버스",
+        id="universe.min-price", name="저가주 빼기", category="universe", category_label="유니버스",
         summary="기준일 종가가 하한보다 낮은 종목을 뺀다. 가격 외의 조건은 보지 않는다.",
         inputs=(_UNIVERSE_IN,), outputs=(_UNIVERSE_OUT,),
         params=(ParamSpec("minClose", "최소 종가", "number",
                           "기준일 종가가 이 값보다 낮으면 제외한다. 0이면 제한 없음.", 0, min=0, unit="달러"),),
         role="UNIVERSE",
     ),
-    FunctionSpec(
-        id="universe.filter", name="조건 필터", category="universe", category_label="유니버스",
-        summary="조건이 참인 종목만 유니버스에 남긴다. 추세 필터를 통과한 종목에서만 팩터를 고를 때 쓴다.",
-        inputs=(_UNIVERSE_IN, _CONDITION_IN), outputs=(_UNIVERSE_OUT,), params=(), role="UNIVERSE",
-    ),
 )
 
 _INDICATORS: tuple[FunctionSpec, ...] = (
     _indicator(
-        "indicator.return", "수익률", "최근 제외 기간을 뺀 측정 기간 수익률. 모멘텀 점수의 재료다.",
+        "indicator.return", "수익률 구하기", "최근 제외 기간을 뺀 측정 기간 수익률. 모멘텀 점수의 재료다.",
         (
             ParamSpec("lookbackDays", "측정 기간", "integer", "수익률을 재는 거래일 수.", 252, min=1, unit="일"),
             ParamSpec("skipDays", "최근 제외", "integer", "단기 반전을 피하려고 뺄 최근 거래일 수.", 0, min=0, unit="일"),
@@ -103,23 +98,23 @@ _INDICATORS: tuple[FunctionSpec, ...] = (
         ("close",), lambda p: int(p["lookbackDays"]) + int(p["skipDays"]) + 1,
     ),
     _indicator(
-        "indicator.moving-average", "이동평균", "종가의 단순이동평균.",
+        "indicator.moving-average", "이동평균 구하기", "종가의 단순이동평균.",
         (ParamSpec("windowDays", "기간", "integer", "평균을 내는 거래일 수.", 20, min=1, unit="일"),),
         ("close",), lambda p: int(p["windowDays"]),
     ),
     _indicator(
-        "indicator.price", "가격", "기준 시점 마지막 봉의 가격.",
+        "indicator.price", "가격 가져오기", "기준 시점 마지막 봉의 가격.",
         (ParamSpec("field", "가격 종류", "enum", "쓸 가격.", "close",
                    options=_opts(("close", "종가"), ("open", "시가"), ("high", "고가"), ("low", "저가"))),),
         ("open", "high", "low", "close"), lambda p: 1,
     ),
     _indicator(
-        "indicator.high", "기간 고점", "오늘을 뺀 직전 기간 고가의 최고치. 오늘 종가와 비교하면 돌파 조건이 된다.",
+        "indicator.high", "기간 고점 구하기", "오늘을 뺀 직전 기간 고가의 최고치. 오늘 종가와 비교하면 돌파 조건이 된다.",
         (ParamSpec("windowDays", "기간", "integer", "고점을 찾는 거래일 수.", 252, min=1, unit="일"),),
         ("high",), lambda p: int(p["windowDays"]) + 1,
     ),
     _indicator(
-        "indicator.volatility", "변동성", "일간 수익률 표준편차 또는 동일가중 시장 대비 베타.",
+        "indicator.volatility", "변동성 구하기", "일간 수익률 표준편차 또는 동일가중 시장 대비 베타.",
         (
             ParamSpec("windowDays", "기간", "integer", "변동을 재는 거래일 수.", 60, min=2, unit="일"),
             ParamSpec("metric", "지표", "enum", "표준편차 또는 베타.", "stdev",
@@ -128,12 +123,12 @@ _INDICATORS: tuple[FunctionSpec, ...] = (
         ("close",), lambda p: int(p["windowDays"]) + 1,
     ),
     _indicator(
-        "indicator.rsi", "RSI", "종목별 RSI 값을 계산한다. 좋고 나쁨을 정하지 않는다.",
+        "indicator.rsi", "RSI 구하기", "종목별 RSI 값을 계산한다. 좋고 나쁨을 정하지 않는다.",
         (ParamSpec("period", "기간", "integer", "RSI 계산에 쓰는 봉 수.", 14, min=2, unit="일"),),
         ("close",), lambda p: int(p["period"]) + 1,
     ),
     _indicator(
-        "indicator.fundamental", "재무 지표", "공개시점 기준 재무 항목 값. 재무 데이터가 연결되기 전에는 실행하지 않는다.",
+        "indicator.fundamental", "재무 지표 가져오기", "공개시점 기준 재무 항목 값. 재무 데이터가 연결되기 전에는 실행하지 않는다.",
         (ParamSpec("field", "항목", "enum", "가져올 재무 항목.", "per",
                    options=_opts(("per", "PER"), ("pbr", "PBR"), ("psr", "PSR"), ("roe", "ROE"),
                                  ("roa", "ROA"), ("debt_ratio", "부채비율"))),),
@@ -143,7 +138,7 @@ _INDICATORS: tuple[FunctionSpec, ...] = (
 
 _SCORES_AND_CONDITIONS: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="score.from-indicator", name="점수화", category="score", category_label="점수",
+        id="score.from-indicator", name="점수 매기기", category="score", category_label="점수",
         summary="지표를 '높을수록 선호' 점수로 바꾼다. 낮을수록 좋은 지표는 방향을 뒤집는다.",
         inputs=(PortSpec("value", "지표 값", "indicator", "점수로 바꿀 지표.", True),),
         outputs=(PortSpec("score", "점수", "score", "높을수록 선호. raw_value에 지표 값이 남는다.", True),),
@@ -157,7 +152,7 @@ _SCORES_AND_CONDITIONS: tuple[FunctionSpec, ...] = (
         role="SCORE",
     ),
     FunctionSpec(
-        id="score.combine", name="점수 합성", category="score", category_label="점수",
+        id="score.combine", name="점수 합치기", category="score", category_label="점수",
         summary="두 점수를 비율로 더한다. 셋 이상은 이어 붙인다. 양쪽에 모두 점수가 있는 종목만 남는다.",
         inputs=(
             PortSpec("left", "왼쪽 점수", "score", "비율을 정하는 기준 점수.", True),
@@ -168,7 +163,7 @@ _SCORES_AND_CONDITIONS: tuple[FunctionSpec, ...] = (
         role="SCORE",
     ),
     FunctionSpec(
-        id="condition.threshold", name="지표 임계 조건", category="condition", category_label="조건",
+        id="condition.threshold", name="기준값과 비교하기", category="condition", category_label="조건",
         summary="지표 값이 임계값과 비교해 참인지 거짓인지만 정한다. 점수와 비중은 만들지 않는다.",
         inputs=(PortSpec("value", "지표 값", "indicator", "비교할 지표.", True),),
         outputs=(PortSpec("condition", "조건", "condition", "비교 결과를 만족하면 참.", True),),
@@ -180,7 +175,7 @@ _SCORES_AND_CONDITIONS: tuple[FunctionSpec, ...] = (
         role="CONDITION",
     ),
     FunctionSpec(
-        id="condition.compare", name="지표 비교 조건", category="condition", category_label="조건",
+        id="condition.compare", name="두 지표 비교하기", category="condition", category_label="조건",
         summary="두 지표를 비교해 참·거짓을 낸다. 가격 > 이동평균, 단기 평균 > 장기 평균, 종가 ≥ 고점 같은 조건이다.",
         inputs=(
             PortSpec("left", "왼쪽 지표", "indicator", "비교의 왼쪽.", True),
@@ -197,7 +192,7 @@ _SCORES_AND_CONDITIONS: tuple[FunctionSpec, ...] = (
 
 _LOGIC: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="logic.combine", name="복수 조건 조합", category="logic", category_label="논리",
+        id="logic.combine", name="조건 묶기", category="logic", category_label="논리",
         summary="여러 상태 조건을 AND 또는 OR로 하나로 합친다.",
         inputs=(PortSpec("conditions", "조건", "condition", "합칠 조건. 두 개 이상 연결한다.", True,
                          multiple=True, min_connections=2),),
@@ -207,14 +202,14 @@ _LOGIC: tuple[FunctionSpec, ...] = (
         role="LOGIC",
     ),
     FunctionSpec(
-        id="logic.not", name="NOT", category="logic", category_label="논리",
+        id="logic.not", name="조건 뒤집기", category="logic", category_label="논리",
         summary="조건의 참·거짓을 뒤집는다.",
         inputs=(_CONDITION_IN,),
         outputs=(PortSpec("condition", "반대 조건", "condition", "참과 거짓이 바뀐 조건.", True),),
         params=(), role="LOGIC",
     ),
     FunctionSpec(
-        id="logic.if-else", name="IF - ELSE", category="logic", category_label="논리",
+        id="logic.if-else", name="조건에 따라 나누기", category="logic", category_label="논리",
         summary="조건이 참이면 한쪽 결과를, 거짓이면 다른 쪽 결과를 내보낸다.",
         inputs=(
             PortSpec("condition", "조건", "condition", "어느 분기를 쓸지 정하는 참·거짓 조건.", True),
@@ -226,28 +221,18 @@ _LOGIC: tuple[FunctionSpec, ...] = (
                           accepts=("condition", "score"), mirrors="thenBranch"),),
         params=(), role="LOGIC",
     ),
-    FunctionSpec(
-        id="logic.set-op", name="전략 집합 연산", category="logic", category_label="논리",
-        summary="두 종목 집합 또는 두 조건을 합집합, 교집합, 차집합으로 합친다.",
-        inputs=(
-            PortSpec("left", "왼쪽 집합", "universe", "연산의 기준 집합.", True, accepts=("universe", "condition")),
-            PortSpec("right", "오른쪽 집합", "universe", "기준 집합과 합칠 집합. 왼쪽과 같은 타입이어야 한다.", True,
-                     accepts=("universe", "condition"), same_type_as="left"),
-        ),
-        outputs=(PortSpec("result", "연산 결과", "universe", "집합 연산 결과. 타입은 입력과 같다.", True,
-                          accepts=("universe", "condition"), mirrors="left"),),
-        params=(ParamSpec("operator", "연산", "enum", "두 집합을 합치는 방식.", "intersect",
-                          options=_opts(("union", "합집합"), ("intersect", "교집합"),
-                                        ("difference", "차집합 (왼쪽 − 오른쪽)"))),),
-        role="LOGIC",
-    ),
 )
 
 _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="selection.top-n", name="상위 N 선정", category="selection", category_label="선정",
-        summary="점수가 높은 순서로 N개를 고른다. 보유 유지 버퍼를 주면 조금 밀린 보유 종목을 남긴다.",
-        inputs=(_SCORE_IN,), outputs=(_SELECTION_OUT,),
+        id="selection.top-n", name="상위 N개 고르기", category="selection", category_label="선정",
+        summary="점수가 높은 순서로 N개를 고른다. 조건을 주면 조건이 참인 종목 안에서만 고른다. 보유 유지 버퍼를 주면 조금 밀린 보유 종목을 남긴다.",
+        inputs=(
+            _SCORE_IN,
+            PortSpec("eligible", "대상 조건", "condition",
+                     "선택. 참인 종목 안에서만 고른다. 예: 종가가 50일선 위인 종목 중 모멘텀 상위 10.", False),
+        ),
+        outputs=(_SELECTION_OUT,),
         params=(
             ParamSpec("topN", "상위 종목 수", "integer", "남길 종목 수.", 20, min=1, unit="개"),
             ParamSpec("bufferN", "보유 유지 버퍼", "integer",
@@ -257,7 +242,7 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         role="SELECTION",
     ),
     FunctionSpec(
-        id="selection.threshold", name="점수 임계 선정", category="selection", category_label="선정",
+        id="selection.threshold", name="점수 기준으로 고르기", category="selection", category_label="선정",
         summary="점수가 기준 이상인 종목만 남긴다. 비중은 정하지 않는다.",
         inputs=(_SCORE_IN,),
         outputs=(PortSpec("selection", "선정 종목", "selection", "기준을 통과한 종목.", True),),
@@ -265,14 +250,14 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         role="SELECTION",
     ),
     FunctionSpec(
-        id="selection.condition", name="조건 선정", category="selection", category_label="선정",
+        id="selection.condition", name="조건 맞는 종목 고르기", category="selection", category_label="선정",
         summary="조건이 참인 종목을 모두 선정한다. 순위는 종목 id 순이다.",
         inputs=(_CONDITION_IN,),
         outputs=(PortSpec("selection", "선정 종목", "selection", "조건이 참인 종목.", True),),
         params=(), role="SELECTION",
     ),
     FunctionSpec(
-        id="event.transition", name="상태 전이 이벤트", category="event", category_label="이벤트",
+        id="event.transition", name="진입·청산 신호 잡기", category="event", category_label="이벤트",
         summary="조건이 전 거래일 거짓에서 오늘 참이 되면 진입, 참에서 거짓이 되면 청산 이벤트를 낸다.",
         inputs=(_CONDITION_IN,),
         outputs=(
@@ -282,9 +267,9 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         params=(), role="EVENT", needs_previous=True,
     ),
     FunctionSpec(
-        id="event.stop", name="손절·익절 청산", category="event", category_label="이벤트",
-        summary="보유 종목이 평균진입가(또는 진입 후 고점) 대비 손절선 아래이거나 익절선 위면 청산 이벤트를 낸다.",
-        inputs=(_UNIVERSE_IN,),
+        id="event.stop", name="손절·익절하기", category="event", category_label="이벤트",
+        summary="보유 종목이 평균진입가(또는 진입 후 고점) 대비 손절선 아래이거나 익절선 위면 청산 이벤트를 낸다. 보유 종목만 보므로 입력이 없다.",
+        inputs=(),
         outputs=(PortSpec("exit", "청산", "event", "손절 또는 익절 시점.", True),),
         params=(
             ParamSpec("stopLossPct", "손절", "number", "이 비율 이상 하락하면 청산. 0이면 쓰지 않는다.", 10, min=0, unit="%"),
@@ -295,9 +280,9 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
         role="EVENT", required_data=RequiredData(("high", "close"), 1, "1d"),
     ),
     FunctionSpec(
-        id="event.holding-period", name="보유기간 청산", category="event", category_label="이벤트",
-        summary="진입 후 거래일 수가 기준 이상이면 청산 이벤트를 낸다.",
-        inputs=(_UNIVERSE_IN,),
+        id="event.holding-period", name="보유기간 지나면 팔기", category="event", category_label="이벤트",
+        summary="진입 후 거래일 수가 기준 이상이면 청산 이벤트를 낸다. 보유 종목만 보므로 입력이 없다.",
+        inputs=(),
         outputs=(PortSpec("exit", "청산", "event", "보유기간이 찬 시점.", True),),
         params=(ParamSpec("maxDays", "보유 기간", "integer", "이 거래일 수가 지나면 청산.", 20, min=1, unit="일"),),
         role="EVENT",
@@ -306,7 +291,7 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
 
 _PORTFOLIO: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="allocation.target-weight", name="목표 비중 자산배분", category="allocation", category_label="비중",
+        id="allocation.target-weight", name="비중 나누기", category="allocation", category_label="비중",
         summary="선정된 종목만 동일 비중 또는 점수 비례 비중으로 나눈다. 상한과 현금은 정하지 않는다.",
         inputs=(PortSpec("selection", "선정 종목", "selection",
                          "랭킹 단계에서 고른 종목. 점수 비례일 때는 선정 결과에 점수가 있어야 한다.", True),),
@@ -316,11 +301,11 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="WEIGHTING",
     ),
     FunctionSpec(
-        id="allocation.indicator-weight", name="지표 비례 비중", category="allocation", category_label="비중",
+        id="allocation.indicator-weight", name="지표로 비중 나누기", category="allocation", category_label="비중",
         summary="지표에 비례하거나 반비례해 선정 종목 비중을 나눈다. 변동성에 반비례하면 역변동성 배분이다.",
         inputs=(
             PortSpec("selection", "선정 종목", "selection", "비중을 나눌 종목.", True),
-            PortSpec("value", "지표 값", "indicator", "비중의 기준. 양수여야 한다.", True),
+            PortSpec("value", "지표 값", "indicator", "보조 입력. 비중의 기준. 양수여야 한다.", True, auxiliary=True),
         ),
         outputs=(PortSpec("weight", "배분 비중", "weight", "합이 1인 비중.", True),),
         params=(ParamSpec("direction", "방향", "enum", "지표에 반비례 또는 비례.", "inverse",
@@ -328,7 +313,25 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="WEIGHTING",
     ),
     FunctionSpec(
-        id="portfolio.max-weight", name="종목 비중 상한", category="portfolio", category_label="포트폴리오 제약",
+        id="allocation.event-slots", name="보유 자리 나누기", category="allocation", category_label="비중",
+        summary="진입·청산 신호를 모으고, 최대 보유 수로 한 종목 비중(1/최대 보유 수)과 빈 자리를 정한다. 게이트를 주면 게이트를 통과한 종목만 진입한다.",
+        inputs=(
+            PortSpec("entry", "진입 신호", "event", "진입 발생 시점. 여러 개를 연결하면 합친다.", True,
+                     multiple=True, min_connections=1),
+            PortSpec("exit", "청산 신호", "event", "청산 발생 시점. 교차·손절·보유기간 등 여러 개를 합친다.", True,
+                     multiple=True, min_connections=1),
+            PortSpec("gate", "진입 게이트", "selection",
+                     "선택. 선정된 종목(또는 조건이 참인 종목)만 진입한다. 선정 결과면 순위가 높은 종목부터 빈 자리를 채운다.",
+                     False, accepts=("selection", "condition"), auxiliary=True),
+        ),
+        outputs=(PortSpec("plan", "진입·청산 계획", "event_plan", "이번 평가일의 진입·청산 종목과 자리 규칙.", True),),
+        params=(ParamSpec("maxPositions", "최대 보유 수", "integer",
+                          "동시에 보유할 최대 종목 수. 진입 비중은 1/최대 보유 수이고, 빈 자리만큼만 진입한다.",
+                          10, min=1, unit="개"),),
+        role="WEIGHTING",
+    ),
+    FunctionSpec(
+        id="portfolio.max-weight", name="비중 상한 두기", category="portfolio", category_label="포트폴리오 제약",
         summary="한 종목 비중을 상한까지만 남긴다. 남는 비중은 다시 나누지 않는다.",
         inputs=(_WEIGHT_IN,),
         outputs=(PortSpec("weight", "제한된 비중", "weight", "상한이 적용된 비중. 주문 수량은 없다.", True),),
@@ -336,7 +339,7 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="CONSTRAINT",
     ),
     FunctionSpec(
-        id="portfolio.cash", name="현금 비중", category="portfolio", category_label="포트폴리오 제약",
+        id="portfolio.cash", name="현금 남기기", category="portfolio", category_label="포트폴리오 제약",
         summary="투자 비중 합계가 1에서 현금 비중을 뺀 값이 되도록 축소한다.",
         inputs=(_WEIGHT_IN,),
         outputs=(PortSpec("weight", "현금 반영 비중", "weight", "현금 비중을 남긴 종목 비중.", True),),
@@ -344,11 +347,12 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="CONSTRAINT",
     ),
     FunctionSpec(
-        id="portfolio.risk-off", name="국면 전환", category="portfolio", category_label="포트폴리오 제약",
+        id="portfolio.risk-off", name="국면 따라 줄이기", category="portfolio", category_label="포트폴리오 제약",
         summary="조건이 거짓인 종목 비중을 줄여 현금으로 둔다. 시장 조건이면 전체에 같이 적용된다.",
         inputs=(
             _WEIGHT_IN,
-            PortSpec("condition", "투자 조건", "condition", "참이면 그대로, 거짓이면 줄인다. 예: 시장 > 시장 200일선.", True),
+            PortSpec("condition", "투자 조건", "condition", "보조 입력. 참이면 그대로, 거짓이면 줄인다. 예: 시장 > 시장 200일선.",
+                     True, auxiliary=True),
         ),
         outputs=(PortSpec("weight", "조정된 비중", "weight", "줄어든 만큼은 현금이 된다.", True),),
         params=(ParamSpec("keepWeightPct", "유지 비율", "number", "조건이 거짓일 때 남길 비중 비율. 0이면 전부 현금.",
@@ -356,7 +360,7 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
         role="CONSTRAINT",
     ),
     FunctionSpec(
-        id="portfolio.target", name="목표 포트폴리오", category="portfolio", category_label="목표 포트폴리오",
+        id="portfolio.target", name="목표 포트폴리오 만들기", category="portfolio", category_label="목표 포트폴리오",
         summary="배분 비중을 목표 비중과 현금으로 확정한다. 주문 수량은 만들지 않는다.",
         inputs=(PortSpec("weight", "배분 비중", "weight", "제약이 끝난 종목 비중.", True),),
         outputs=(PortSpec("portfolio", "목표 포트폴리오", "target_portfolio", "종목별 목표 비중과 현금 비중.", True),),
@@ -366,36 +370,23 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
 
 _DECISION_AND_EXECUTION: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="strategy.state", name="상태 평가 전략", category="strategy", category_label="전략 판단",
+        id="strategy.state", name="목표 비중 맞추기", category="strategy", category_label="전략 판단",
         summary="목표 포트폴리오를 매 평가 시점의 목표 보유 상태로 바꾼다. 비중은 다시 계산하지 않는다.",
         inputs=(
-            _UNIVERSE_IN,
             PortSpec("portfolio", "목표 포트폴리오", "target_portfolio",
-                     "종목별 목표 비중. 없는 종목과 유니버스에서 빠진 보유 종목은 목표 0.", True),
+                     "종목별 목표 비중. 목표에 없는 보유 종목은 목표 0.", True),
         ),
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="STATE_REBALANCE",
     ),
     FunctionSpec(
-        id="strategy.event", name="이벤트 전략", category="strategy", category_label="전략 판단",
-        summary="진입·청산 이벤트와 현재 보유를 비교해 한 번의 전이만 발생시킨다. 게이트를 주면 게이트를 통과한 종목만 진입한다.",
-        inputs=(
-            _UNIVERSE_IN,
-            PortSpec("entry", "진입 이벤트", "event", "진입 발생 시점. 여러 개를 연결하면 합친다.", True,
-                     multiple=True, min_connections=1),
-            PortSpec("exit", "청산 이벤트", "event", "청산 발생 시점. 교차·손절·보유기간 등 여러 개를 합친다.", True,
-                     multiple=True, min_connections=1),
-            PortSpec("gate", "진입 게이트", "condition",
-                     "선택. 조건이 참이거나 선정된 종목만 진입한다. 선정 결과면 순위가 높은 종목부터 빈 자리를 채운다.",
-                     False, accepts=("condition", "selection")),
-        ),
-        outputs=(_RESULT_OUT,),
-        params=(ParamSpec("maxPositions", "최대 보유 수", "integer",
-                          "동시에 보유할 최대 종목 수. 진입 비중은 1/최대 보유 수이고, 빈 자리만큼만 진입한다.",
-                          10, min=1, unit="개"),),
+        id="strategy.event", name="신호대로 사고팔기", category="strategy", category_label="전략 판단",
+        summary="진입·청산 계획과 현재 보유를 비교해 한 번의 전이만 발생시킨다. 청산이 진입보다 우선한다.",
+        inputs=(PortSpec("plan", "진입·청산 계획", "event_plan", "보유 자리 나누기의 결과.", True),),
+        outputs=(_RESULT_OUT,), params=(),
         role="STRATEGY", strategy_execution_type="EVENT_LIFECYCLE",
     ),
     FunctionSpec(
-        id="execution.orders", name="주문 실행", category="execution", category_label="실행",
+        id="execution.orders", name="주문 내기", category="execution", category_label="실행",
         summary="전략 판단을 주문 수량으로 바꿔 다음 시가에 체결한다. 언제 다시 맞출지를 여기서만 정한다.",
         inputs=(PortSpec("result", "전략 판단", "strategy_result", "주문으로 바꿀 전략 판단 결과.", True),),
         outputs=(),
@@ -449,6 +440,7 @@ def _port_dict(port: PortSpec) -> dict[str, object]:
         "accepts": list(port.accepts),
         "sameTypeAs": port.same_type_as,
         "mirrors": port.mirrors,
+        "auxiliary": port.auxiliary,
     }
 
 

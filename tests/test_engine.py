@@ -100,11 +100,11 @@ class EngineTests(unittest.TestCase):
                       {"fast": {"windowDays": 2}, "slow": {"windowDays": 3}})
         graph = StrategyGraph(
             nodes=(StrategyNode("universe", "universe.compose", {}),) + cross.nodes
-            + (StrategyNode("decision", "strategy.event", {}),),
+            + (StrategyNode("slots", "allocation.event-slots", {}), StrategyNode("decision", "strategy.event", {})),
             edges=cross.edges + (
-                StrategyEdge("universe", "universe", "decision", "universe"),
-                StrategyEdge(*cross.out("entry"), "decision", "entry"),
-                StrategyEdge(*cross.out("exit"), "decision", "exit"),
+                StrategyEdge(*cross.out("entry"), "slots", "entry"),
+                StrategyEdge(*cross.out("exit"), "slots", "exit"),
+                StrategyEdge("slots", "plan", "decision", "plan"),
             ),
         )
         result = execute(graph, ExecutionContext(at("2026-01-05"), history))
@@ -130,7 +130,6 @@ def momentum_strategy(*, drift: float = 0, rebalance: str = "monthly") -> Strate
             StrategyNode("orders", "execution.orders", {"rebalanceFrequency": rebalance, "driftThresholdPct": drift}),
         ),
         base.edges + (
-            StrategyEdge("universe", "universe", "decision", "universe"),
             StrategyEdge("target", "portfolio", "decision", "portfolio"),
             StrategyEdge("decision", "result", "orders", "result"),
         ),

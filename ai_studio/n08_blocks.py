@@ -141,35 +141,6 @@ def if_else_condition(
     return ConditionFrame(tuple(rows))
 
 
-def set_condition_operation(left: ConditionFrame, right: ConditionFrame, operator: str) -> ConditionFrame:
-    """logic.set-op. 참인 종목만 집합 연산하고, 나머지 종목은 거짓으로 남긴다."""
-    chosen = set(set_operation(
-        {row.instrument_id for row in left.rows if row.matched},
-        {row.instrument_id for row in right.rows if row.matched},
-        operator,
-    ))
-    order: list[str] = []
-    seen: set[str] = set()
-    for row in (*left.rows, *right.rows):
-        if row.instrument_id not in seen:
-            seen.add(row.instrument_id)
-            order.append(row.instrument_id)
-    return _condition({symbol: symbol in chosen for symbol in order})
-
-
-def set_operation(left: set[str], right: set[str], operator: str) -> tuple[str, ...]:
-    """logic.set-op. 합집합, 교집합, 차집합."""
-    if operator == "union":
-        result = left | right
-    elif operator == "intersect":
-        result = left & right
-    elif operator == "difference":
-        result = left - right
-    else:
-        raise ValueError(f"지원하지 않는 집합 연산입니다: {operator}")
-    return tuple(sorted(result))
-
-
 def allocate_target_weight(selection: SelectionFrame, scheme: str = "equal") -> WeightFrame:
     """allocation.target-weight."""
     if scheme == "equal":
@@ -334,12 +305,12 @@ def rsi_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
                       lambda s: rsi([bar.close for bar in s], period))
 
 
-def filter_universe(universe: UniverseFrame, condition: ConditionFrame) -> UniverseFrame:
-    """universe.filter. 조건이 참인 종목만 남긴다. 시장 한 줄 조건이면 전체를 남기거나 비운다."""
+def eligible_scores(scores: ScoreFrame, condition: ConditionFrame) -> ScoreFrame:
+    """selection.top-n의 대상 조건. 조건이 참인 종목의 점수만 남긴다. 시장 한 줄 조건이면 전체를 남기거나 비운다."""
     flags = condition.matches()
     if list(flags) == [MARKET_ID]:
-        return universe if flags[MARKET_ID] else UniverseFrame(universe.as_of, ())
-    return UniverseFrame(universe.as_of, tuple(s for s in universe.symbols if flags.get(s, False)))
+        return scores if flags[MARKET_ID] else ScoreFrame(())
+    return ScoreFrame(tuple(row for row in scores.rows if flags.get(row.instrument_id, False)))
 
 
 # ── 보유 기반 청산 이벤트 ──────────────────────────────────────

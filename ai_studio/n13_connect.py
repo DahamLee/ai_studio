@@ -4,13 +4,18 @@ from math import isfinite
 
 from ai_studio.n10_functions import get_function
 from ai_studio.n02_schema import (
+    STAGES,
     FunctionSpec,
     PortSpec,
     PortType,
     StrategyEdge,
     StrategyGraph,
     accepted_types,
+    stage_of,
 )
+
+_STAGE_INDEX = {stage: index for index, (stage, _, _) in enumerate(STAGES)}
+_STAGE_LABEL = {stage: label for stage, label, _ in STAGES}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +46,20 @@ def can_connect(
     if actual not in accepts:
         names = ", ".join(accepts)
         return ConnectResult(False, f"{target.label}은 {names}만 받을 수 있습니다.")
+    return ConnectResult(True)
+
+
+def check_stage_order(from_fn: FunctionSpec, to_fn: FunctionSpec, to_port: PortSpec) -> ConnectResult:
+    """선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 다음 단계에서만 받고,
+    보조 입력(auxiliary)만 단계를 건너뛸 수 있다."""
+    source, target = stage_of(from_fn.role), stage_of(to_fn.role)
+    gap = _STAGE_INDEX[target] - _STAGE_INDEX[source]
+    if gap < 0:
+        return ConnectResult(False, f"{to_fn.name}({_STAGE_LABEL[target]})은 뒤 단계인 "
+                                    f"{from_fn.name}({_STAGE_LABEL[source]})에서 받을 수 없습니다.")
+    if gap > 1 and not to_port.auxiliary:
+        return ConnectResult(False, f"{to_fn.name}의 {to_port.label}은 바로 앞 단계에서만 받습니다. "
+                                    f"{from_fn.name}({_STAGE_LABEL[source]})은 단계를 건너뜁니다.")
     return ConnectResult(True)
 
 
@@ -80,6 +99,9 @@ def validate_graph(graph: StrategyGraph) -> ConnectResult:
                 f"{from_fn.name}의 {from_port.label} 타입이 아직 정해지지 않았습니다.",
             )
         result = can_connect(from_port, to_port, source_type)
+        if not result.ok:
+            return result
+        result = check_stage_order(from_fn, to_fn, to_port)
         if not result.ok:
             return result
 

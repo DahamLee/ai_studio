@@ -7,7 +7,7 @@ from ai_studio.n02_schema import StrategyEdge, StrategyGraph, StrategyNode
 from ai_studio.n10_functions import FUNCTIONS, get_function
 from ai_studio.n11_registry import registered_ids
 from ai_studio.n12_strategies import EXAMPLES, PRESETS, momentum_rebalance, momentum_top10, place
-from ai_studio.n13_connect import can_connect, validate_graph, validate_strategy
+from ai_studio.n13_connect import can_connect, check_stage_order, validate_graph, validate_strategy
 
 
 def _port(function_id: str, key: str, side: str = "outputs"):
@@ -42,7 +42,8 @@ def main() -> None:
         (("score.from-indicator", "score"), ("condition.threshold", "value"), False),
         (("score.from-indicator", "score"), ("universe.exclude", "universe"), False),
         (("logic.combine", "condition"), ("allocation.target-weight", "selection"), False),
-        (("selection.condition", "selection"), ("strategy.event", "gate"), True),
+        (("selection.condition", "selection"), ("allocation.event-slots", "gate"), True),
+        (("allocation.event-slots", "plan"), ("strategy.event", "plan"), True),
         (("event.transition", "entry"), ("strategy.state", "portfolio"), False),
         (("portfolio.target", "portfolio"), ("strategy.state", "portfolio"), True),
         (("strategy.event", "result"), ("execution.orders", "result"), True),
@@ -51,6 +52,18 @@ def main() -> None:
         result = can_connect(_port(source_fn, source_key), _port(target_fn, target_key, "inputs"))
         if result.ok is not expected:
             raise SystemExit(f"{source_fn}.{source_key} → {target_fn}.{target_key} 연결 판정이 틀렸습니다.")
+
+    order = (
+        ("condition.compare", "portfolio.risk-off", "condition", True),     # 보조 입력은 건너뛸 수 있다
+        ("condition.compare", "selection.top-n", "eligible", True),         # 바로 다음 단계
+        ("portfolio.target", "strategy.state", "portfolio", True),
+        ("universe.compose", "strategy.state", "portfolio", False),         # 주 입력은 건너뛸 수 없다
+        ("strategy.state", "indicator.return", "universe", False),          # 역방향
+    )
+    for source_fn, target_fn, target_key, expected in order:
+        result = check_stage_order(get_function(source_fn), get_function(target_fn), _port(target_fn, target_key, "inputs"))
+        if result.ok is not expected:
+            raise SystemExit(f"{source_fn} → {target_fn}.{target_key} 단계 순서 판정이 틀렸습니다.")
 
     mixed = validate_graph(StrategyGraph(
         (StrategyNode("u", "universe.compose", {}), StrategyNode("r", "indicator.return", {}),

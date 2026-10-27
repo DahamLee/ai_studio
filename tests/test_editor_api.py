@@ -13,7 +13,7 @@ class BacktestApiTests(unittest.TestCase):
         graph["edges"] = [edge for edge in graph["edges"] if edge["to"] != "orders"]
         report = backtest({"graph": graph, "settings": {}})
         self.assertFalse(report["ok"])
-        self.assertIn("주문 실행", str(report["reason"]))
+        self.assertIn("주문 내기", str(report["reason"]))
 
     @unittest.skipUnless(DATA.exists(), "저장된 일봉이 없다")
     def test_summary_matches_ledger(self) -> None:

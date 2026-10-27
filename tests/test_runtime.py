@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 
-from ai_studio.n13_connect import can_connect, validate_graph
+from ai_studio.n13_connect import can_connect, check_stage_order, validate_graph
 from ai_studio.n09_backtest import run_backtest, trade_rows, write_trades_csv
 from ai_studio.n10_functions import FUNCTIONS, function_catalog, get_function
 from ai_studio.n01_frames import MarketBar, StrategyValidationError, UniverseFrame
@@ -43,25 +43,34 @@ class ContractTests(unittest.TestCase):
         state = next(fn for fn in functions if fn["id"] == "strategy.state")
         self.assertEqual(state["instance"]["params"], {})
 
-    def test_registry_and_universe_ports(self):
+    def test_registry_and_decision_ports(self):
         self.assertEqual(len(FUNCTIONS), len({f.id for f in FUNCTIONS}))
         source = get_function("universe.compose").outputs[0]
         for name in ("strategy.state", "strategy.event"):
             fn = get_function(name)
-            self.assertTrue(can_connect(source, fn.inputs[0]).ok)
+            # 판단 노드는 유니버스를 직접 받지 않는다. 유니버스는 앞 단계 데이터에 반영돼 있다.
+            self.assertFalse(any(can_connect(source, port).ok for port in fn.inputs))
             self.assertEqual(fn.outputs[0].type, "strategy_result")
+
+    def test_main_inputs_only_take_the_previous_stage(self):
+        ret, transition = get_function("indicator.return"), get_function("event.transition")
+        slots, risk_off = get_function("allocation.event-slots"), get_function("portfolio.risk-off")
+        compare = get_function("condition.compare")
+        self.assertTrue(check_stage_order(transition, slots, slots.inputs[0]).ok)
+        self.assertTrue(check_stage_order(compare, risk_off, risk_off.inputs[1]).ok)   # 보조 입력
+        self.assertFalse(check_stage_order(compare, slots, slots.inputs[0]).ok)         # 주 입력 건너뜀
+        self.assertFalse(check_stage_order(slots, ret, ret.inputs[0]).ok)                  # 역방향
 
     def test_event_does_not_connect_to_state_portfolio(self):
         source = get_function("event.transition").outputs[0]
-        self.assertFalse(can_connect(source, get_function("strategy.state").inputs[1]).ok)
-        self.assertTrue(can_connect(source, get_function("strategy.event").inputs[1]).ok)
+        self.assertFalse(can_connect(source, get_function("strategy.state").inputs[0]).ok)
+        self.assertTrue(can_connect(source, get_function("allocation.event-slots").inputs[0]).ok)
 
     def test_graph_validates_both_event_ports(self):
         cross = place("golden-cross", "x", {"universe": ("u", "universe")})
         graph = StrategyGraph(
-            (StrategyNode("u", "universe.compose", {}),) + cross.nodes + (StrategyNode("s", "strategy.event", {}),),
-            cross.edges + (StrategyEdge("u", "universe", "s", "universe"),
-                           StrategyEdge(*cross.out("entry"), "s", "entry"),
+            (StrategyNode("u", "universe.compose", {}),) + cross.nodes + (StrategyNode("s", "allocation.event-slots", {}),),
+            cross.edges + (StrategyEdge(*cross.out("entry"), "s", "entry"),
                            StrategyEdge(*cross.out("exit"), "s", "exit")),
         )
         self.assertTrue(validate_graph(graph).ok)

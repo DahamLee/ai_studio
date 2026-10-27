@@ -123,6 +123,7 @@ h1 { margin: 0; font-size: 1.125rem; }
 .edges { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .edges path { fill: none; stroke: #8fb8e3; stroke-width: 1.75; pointer-events: stroke; cursor: pointer; }
 .edges path:hover { stroke: #b42318; stroke-width: 3; }
+.edges path.aux { stroke-dasharray: 6 5; stroke: #b9a3d9; }
 
 .cn {
   position: absolute;
