@@ -89,6 +89,32 @@ PYTHONPATH=. .venv/bin/python scripts/preview_blocks.py
 cd web && npm install && npm run dev          # 편집기. /api/validate·/api/backtest가 Python을 부른다
 ```
 
+## 데이터
+
+| 파일 | 내용 | 만드는 법 |
+|---|---|---|
+| `data/sp500_ohlc_1y.csv` | S&P 500 503종목 일봉 (date, symbol, open, high, low, close, volume) | `scripts/fetch_yahoo_ohlc.py` |
+| `data/sp500_fundamentals_sample.csv` | 같은 503종목의 분기 재무 **예시값**(가짜), 2024Q3~2026Q2, 계정 11개 | `scripts/make_sample_fundamentals.py` |
+
+재무 표는 한 행이 "종목 × 계정 × 분기"인 long 형식입니다.
+
+| symbol | account_code | value | unit | fiscal_period | fiscal_date | upload_date |
+|---|---|---|---|---|---|---|
+| AAPL | ROE | 25.85 | % | 2025Q3 | 2025-09-30 | 2025-11-14 |
+
+- `fiscal_date`는 공시가 적용되는 회계 기준일(분기 말), `upload_date`는 공시가 실제로 올라온 날입니다. 2025Q3 실적은 2025-11-14부터 쓸 수 있습니다.
+- 계정코드: REVENUE, NET_INCOME, TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_EQUITY, SHARES_OUTSTANDING(백만 단위), EPS, BPS(달러), ROE, ROA, DEBT_RATIO(퍼센트 값, 10%는 10.0). ROE·ROA는 최근 4분기 순이익 기준입니다.
+- 일봉과는 **`upload_date` 기준 as-of 조인**으로 붙입니다. `fiscal_date`로 붙이면 공개 전 실적을 미리 보는 미래 참조가 됩니다.
+
+```python
+fund = pd.read_csv("data/sp500_fundamentals_sample.csv", parse_dates=["fiscal_date", "upload_date"])
+wide = fund.pivot_table(index=["symbol", "fiscal_period", "fiscal_date", "upload_date"],
+                        columns="account_code", values="value").reset_index()
+ohlc = pd.read_csv("data/sp500_ohlc_1y.csv", parse_dates=["date"])
+joined = pd.merge_asof(ohlc.sort_values("date"), wide.sort_values("upload_date"),
+                       left_on="date", right_on="upload_date", by="symbol", direction="backward")
+```
+
 ## 백테스트 적용 전 점검
 
 이 참조 구현은 시점별 입력을 호출자가 제공합니다. 재무자료의 실제 공개시점, 지수 편입 이력, 상장폐지, 휴장일, 분할·배당, 세금, 부분체결과 실제 주문 거부를 처리하지 않습니다. 시장 범위 지표는 적재된 종목의 동일가중 합성 지수입니다. 실데이터 어댑터는 `available_at <= 신호 계산 시각`을 보장해야 하고, 수정주가로 만든 신호와 실제 체결가격·수량은 기업행동 처리로 맞춰야 합니다. 신호를 만든 당일 종가 체결은 허용하지 않습니다. 다음 시가가 올라 현금이 모자라면 실행 노드의 `shortfall` 정책에 따라 수량을 줄이거나(기본) 오류를 냅니다.
