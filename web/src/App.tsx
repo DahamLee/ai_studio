@@ -781,7 +781,8 @@ export function App() {
                 const fn = byId.get(node.functionId);
                 if (!fn || groups.has(node.instanceId)) return null;
                 const walled = dragRef.current?.id === node.instanceId && dragRef.current.blocked;
-                const classes = ["cn", node.instanceId === selectedId ? "sel" : "", walled ? "wall" : ""].filter(Boolean).join(" ");
+                const member = [...groups.values()].some((members) => members.includes(node.instanceId));
+                const classes = ["cn", member ? "in-grp" : "", node.instanceId === selectedId ? "sel" : "", walled ? "wall" : ""].filter(Boolean).join(" ");
                 return (
                   <article
                     key={node.instanceId}

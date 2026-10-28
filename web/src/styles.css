@@ -155,7 +155,9 @@ h1 { margin: 0; font-size: 1.125rem; }
 }
 .cn:hover { border-color: #8b97a3; }
 /* 묶음 틀: 같은 단계의 입력을 받아 합치는 노드(점수 합치기·조건 묶기·조건에 따라 나누기). */
-.grp { position: absolute; border: 1.5px dashed #8fb8e3; border-radius: 12px; background: rgba(8, 117, 209, 0.05); }
+/* 선(.edges, z-index 2) 위에 불투명하게 깔아 윗단계에서 내려오는 선을 덮는다. 입력 노드 카드는 그 위에 온다. */
+.grp { position: absolute; z-index: 3; border: 1.5px dashed #8fb8e3; border-radius: 12px; background: #eef5fc; }
+.cn.in-grp { z-index: 4; }  /* 묶음 틀 위 */
 .grp.sel { border-color: #0875d1; border-style: solid; box-shadow: 0 0 0 3px #d7ebfb; }
 .grp-h { display: flex; align-items: center; gap: 0.5rem; height: 24px; padding: 0 0.5rem 0 0.625rem; cursor: pointer; }
 .grp-h b { font-size: 0.8125rem; white-space: nowrap; }
@@ -164,7 +166,7 @@ h1 { margin: 0; font-size: 1.125rem; }
 .grp-h button:hover { color: #b42318; }
 .grp-tag {
   position: absolute; height: 16px; padding: 0 0.4rem; border: 0; border-radius: 8px;
-  background: #e3effb; color: #0b5cab; font-size: 0.625rem; font-weight: 700; cursor: pointer; z-index: 2;
+  background: #d6e8fa; color: #0b5cab; font-size: 0.625rem; font-weight: 700; cursor: pointer; z-index: 4;
 }
 .grp-tag:hover { background: #fde8e6; color: #b42318; text-decoration: line-through; }
 .cn.sel { border-color: #0875d1; box-shadow: 0 0 0 3px #d7ebfb; }
