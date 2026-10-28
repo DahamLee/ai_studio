@@ -38,7 +38,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(compose["instance"]["function_id"], "universe.compose")
         self.assertEqual(
             compose["instance"]["params"],
-            {"market": "US_EQUITY", "benchmark": "SPX", "minMarketCap": 0},
+            {"market": "US_EQUITY", "benchmark": "SPX"},
         )
         state = next(fn for fn in functions if fn["id"] == "strategy.state")
         self.assertEqual(state["instance"]["params"], {})

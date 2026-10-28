@@ -8,13 +8,13 @@
 
 | 단계 | 역할 | 입력 → 출력 | 예 |
 |---|---|---|---|
-| 1 종목 고르기 | UNIVERSE | → `universe` | 종목 불러오기, 투자 제외하기, 재무 조건으로 거르기, 저가주 빼기 |
-| 2 지표 계산하기 | INDICATOR | `universe` → `indicator` | 수익률·이동평균·가격·기간 고점·변동성·RSI 구하기 (종목·시장 범위), 재무 지표 가져오기(PER·PBR·PSR·ROE 등) |
+| 1 종목 고르기 | UNIVERSE | → `universe` | 종목 불러오기, 투자 제외하기, 재무 조건으로 거르기, 시가총액으로 거르기, 저가주 빼기 |
+| 2 지표 계산하기 | INDICATOR | `universe` → `indicator` | 수익률·이동평균(SMA·EMA)·가격·기간 고점·변동성·RSI·MACD·볼린저 밴드·ATR 구하기 (종목·시장 범위), 재무 지표 가져오기(PER·PBR·PSR·ROE·성장률 등) |
 | 3 평가하기 | SCORE / CONDITION / LOGIC | `indicator` → `score`·`condition` | 점수 매기기·합치기, 기준값·두 지표 비교하기, 조건 묶기·뒤집기 |
 | 4 매매 대상 정하기 \| 매매 신호 잡기 | SELECTION / EVENT | → `selection`·`event` | 대상: 상위 N개 고르기(대상 조건, 보유 유지 버퍼), 점수 기준으로 고르기, 조건 맞는 종목 고르기 · 신호: 진입·청산 시점 잡기, 손절·익절 시점 잡기, 보유기간 만료 시점 잡기 |
 | 5 비중 정하기 | WEIGHTING / CONSTRAINT / TARGET | → `weight` → `target_portfolio`, → `event_plan` | 비중 나누기, 최대 보유 수로 비중 정하기, 비중 상한 두기, 현금 남기기, 국면 따라 줄이기 |
 | 6 매매 결정하기 | STRATEGY | → `strategy_result` | 리밸런싱 하기, 신호와 보유 비교하기 (현재 보유와 비교해 살 것·팔 것·둘 것을 정한다) |
-| 7 주문하기 | EXECUTION | `strategy_result` → 원장 | 주기·체결 방식 정하기 (주식 수 계산, 리밸런스 주기, 현금 부족 처리) |
+| 7 주문하기 | EXECUTION | `strategy_result` → 원장 | 주기·체결 방식 정하기 (주식 수 계산, 리밸런스 주기·날짜, 무거래 구간, 현금 부족 처리) |
 
 - **선은 순서대로만 이어집니다.** 주 입력은 같은 단계나 바로 앞 단계에서만 받고, 뒤 단계에서 앞 단계로는 이을 수 없습니다. 보조 입력(국면 따라 줄이기의 투자 조건, 지표로 비중 나누기의 지표, 최대 보유 수로 비중 정하기의 게이트)만 단계를 건너뜁니다. 판단 노드는 유니버스를 직접 받지 않습니다.
 - 4단계는 한 띠 안에 두 칸입니다. 왼쪽 **매매 대상 정하기**는 "주기마다 어떤 종목을 들고 있을까"(상태형), 오른쪽 **매매 신호 잡기**는 "무슨 일이 생긴 순간 사고팔까"(이벤트형)입니다. 갈래는 지표 종류(기술적·재무)가 아니라 전략 방식으로 정해집니다.
@@ -94,7 +94,7 @@ cd web && npm install && npm run dev          # 편집기. /api/validate·/api/b
 | 파일 | 내용 | 만드는 법 |
 |---|---|---|
 | `data/sp500_ohlc_1y.csv` | S&P 500 503종목 일봉 (date, symbol, open, high, low, close, volume) | `scripts/fetch_yahoo_ohlc.py` |
-| `data/sp500_fundamentals_sample.csv` | 같은 503종목의 분기 재무 **예시값**(가짜), 2024Q3~2026Q2, 계정 11개 | `scripts/make_sample_fundamentals.py` |
+| `data/sp500_fundamentals_sample.csv` | 같은 503종목의 분기 재무 **예시값**(가짜), 2024Q2~2026Q2, 계정 11개 | `scripts/make_sample_fundamentals.py` |
 
 재무 표는 한 행이 "종목 × 계정 × 분기"인 long 형식입니다.
 

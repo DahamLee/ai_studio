@@ -184,8 +184,11 @@ def generate_orders(
     fee_rate: float = 0.0, slippage_rate: float = 0.0,
     allow_fractional_shares: bool = False, pending: Sequence[OrderIntent] = (),
     processed_event_ids: frozenset[str] = frozenset(),
+    no_trade_band: float = 0.0,
 ) -> tuple[OrderIntent, ...]:
     """신호일 종가로 수량을 정한다. 매도는 먼저 넣고, 매수는 남은 현금으로 온주를 산다.
+    no_trade_band(비중, 0.01 = 1%p)가 있으면 상태 평가형에서 이미 보유했고 목표도 0이 아닌 종목은
+    비중 차이가 그보다 작을 때 주문하지 않는다. 신규 진입과 전량 청산은 항상 주문한다.
 
     목표수량 = floor(평가금액 × 목표비중 / 종가)
     1주 예산 = 종가 × (1 + 수수료율 + 슬리피지율)
@@ -221,6 +224,9 @@ def generate_orders(
         else:
             continue
         delta = target - effective
+        if (no_trade_band > 0 and result.strategy_execution_type == "STATE_REBALANCE" and effective > 0 and target > 0
+                and portfolio_value > 0 and abs(delta) * price / portfolio_value < no_trade_band):
+            continue
         if delta < 0:
             quantity = min(-delta, max(current + min(pending_delta.get(row.symbol, 0), 0), 0))
             if quantity > 0:

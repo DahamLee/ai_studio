@@ -15,6 +15,41 @@ def moving_average(values: Sequence[float], window: int) -> float:
     return sum(span) / window
 
 
+def ema_series(values: Sequence[float], period: int) -> list[float]:
+    """지수이동평균 계열. 첫 값은 앞 period개 단순평균이고, 이후 α = 2 / (period + 1)로 갱신한다.
+    결과 길이는 len(values) - period + 1이다."""
+    if period < 1:
+        raise ValueError("지수이동평균 기간은 1 이상이어야 합니다.")
+    if len(values) < period:
+        raise ValueError("지수이동평균을 계산할 가격이 부족합니다.")
+    alpha = 2 / (period + 1)
+    out = [sum(values[:period]) / period]
+    for value in values[period:]:
+        out.append(out[-1] + alpha * (value - out[-1]))
+    return out
+
+
+def macd(closes: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[float, float, float]:
+    """(MACD선, 시그널선, 히스토그램). MACD선 = 단기 EMA - 장기 EMA, 시그널 = MACD선의 EMA."""
+    if not 1 <= fast < slow or signal < 1:
+        raise ValueError("MACD 기간은 1 ≤ 단기 < 장기, 시그널 ≥ 1이어야 합니다.")
+    if len(closes) < slow + signal - 1:
+        raise ValueError("MACD를 계산할 가격이 부족합니다.")
+    slow_line = ema_series(closes, slow)
+    fast_line = ema_series(closes, fast)[-len(slow_line):]
+    line = [f - s for f, s in zip(fast_line, slow_line)]
+    signal_line = ema_series(line, signal)
+    return line[-1], signal_line[-1], line[-1] - signal_line[-1]
+
+
+def true_ranges(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float]) -> list[float]:
+    """실제 변동폭. 둘째 봉부터 max(고가-저가, |고가-전일 종가|, |저가-전일 종가|)."""
+    return [
+        max(highs[index] - lows[index], abs(highs[index] - closes[index - 1]), abs(lows[index] - closes[index - 1]))
+        for index in range(1, len(closes))
+    ]
+
+
 def window_high(values: Sequence[float], window: int) -> float:
     if window < 1:
         raise ValueError("고점 기간은 1 이상이어야 합니다.")

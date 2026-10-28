@@ -23,7 +23,7 @@ from ai_studio.n06_portfolio import (
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 from ai_studio.n08_blocks import (
     allocate_target_weight, combine_conditions, compose_universe, eligible_scores, exclude_universe,
-    fundamental_indicator, fundamental_universe,
+    atr_indicator, bollinger_indicator, fundamental_indicator, fundamental_universe, macd_indicator, market_cap_universe,
     high_indicator, holding_period_exit_events, if_else_condition, if_else_score, min_price_universe,
     moving_average_indicator, price_indicator, return_indicator, rsi_indicator, stop_exit_events,
     volatility_indicator,
@@ -74,8 +74,6 @@ def _held(context: ExecutionContext) -> set[str]:
 def _compose(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     if params["benchmark"] != "SPX" or params["market"] != "US_EQUITY":
         raise ValueError("적재된 일봉은 S&P 500 미국 주식만 포함합니다.")
-    if float(params["minMarketCap"]) > 0:  # type: ignore[arg-type]
-        raise ValueError("시가총액 필터는 시가총액 데이터가 필요합니다.")
     return {"universe": compose_universe(context.history, context.as_of)}
 
 
@@ -101,6 +99,14 @@ def _fundamentals(context: ExecutionContext, name: str) -> Fundamentals:
     if context.fundamentals is None:
         raise ValueError(f"{name}에는 재무 공시 데이터가 필요합니다. 일봉만으로는 계산하지 않습니다.")
     return context.fundamentals
+
+
+def _market_cap(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    return {"universe": market_cap_universe(
+        context.history, _fundamentals(context, "시가총액으로 거르기"), universe.symbols, context.as_of,
+        min_cap=float(params["minCap"]), top_n=int(params["topN"]),  # type: ignore[arg-type]
+    )}
 
 
 def _fundamental_universe(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
@@ -319,13 +325,19 @@ def register_builtin_handlers() -> None:
         ("universe.compose", _compose),
         ("universe.exclude", _exclude),
         ("universe.fundamental", _fundamental_universe),
+        ("universe.market-cap", _market_cap),
         ("universe.min-price", _min_price),
         ("indicator.return", _indicator(return_indicator, lookback_days=("lookbackDays", int), skip_days=("skipDays", int))),
-        ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int))),
+        ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int), method=("method", str))),
         ("indicator.price", _indicator(price_indicator, field=("field", str))),
         ("indicator.high", _indicator(high_indicator, window_days=("windowDays", int))),
         ("indicator.volatility", _indicator(volatility_indicator, window_days=("windowDays", int), metric=("metric", str))),
         ("indicator.rsi", _indicator(rsi_indicator, period=("period", int))),
+        ("indicator.macd", _indicator(macd_indicator, fast_days=("fastDays", int), slow_days=("slowDays", int),
+                                      signal_days=("signalDays", int), line=("line", str))),
+        ("indicator.bollinger", _indicator(bollinger_indicator, window_days=("windowDays", int), width=("width", float),
+                                           line=("line", str))),
+        ("indicator.atr", _indicator(atr_indicator, period_days=("periodDays", int), unit=("unit", str))),
         ("indicator.fundamental", _fundamental),
         ("score.from-indicator", _score),
         ("score.combine", _score_combine),

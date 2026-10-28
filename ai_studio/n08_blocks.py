@@ -22,9 +22,13 @@ from ai_studio.n01_frames import (
     WeightFrame,
     WeightRow,
 )
-from ai_studio.n03_market_data import Fundamentals, History, bars_until, filing_as_of, session_date, trailing_sum
+from ai_studio.n03_market_data import (
+    Fundamentals, History, bars_until, filing_as_of, filings_until, session_date, trailing_sum,
+)
 from ai_studio.n05_signals import OPERATORS
-from ai_studio.n04_indicators import daily_returns, moving_average, rsi, stdev, total_return, window_high
+from ai_studio.n04_indicators import (
+    daily_returns, ema_series, macd, moving_average, rsi, stdev, total_return, true_ranges, window_high,
+)
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
 
 
@@ -278,13 +282,81 @@ def return_indicator(history: History, symbols: Sequence[str], as_of: datetime, 
                       lambda s: total_return([bar.close for bar in s], lookback_days, skip_days))
 
 
+# 지수이동평균은 처음 값의 영향이 남으므로, 최근 이 배수만큼의 봉으로 계산해 계산량과 값을 고정한다.
+EMA_WARMUP = 3
+
+
 def moving_average_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
-                             window_days: int = 20, scope: str = "symbol") -> IndicatorFrame:
-    """indicator.moving-average. 종가 단순이동평균."""
+                             window_days: int = 20, method: str = "sma", scope: str = "symbol") -> IndicatorFrame:
+    """indicator.moving-average. 종가 단순(sma) 또는 지수(ema) 이동평균.
+    지수이동평균은 최근 window_days × EMA_WARMUP 봉(그보다 적으면 있는 만큼)으로 계산한다."""
     if window_days < 1:
         raise ValueError("이동평균 기간은 1일 이상이어야 합니다.")
-    return _indicator(history, symbols, as_of, scope, window_days,
-                      lambda s: moving_average([bar.close for bar in s], window_days))
+    if method == "sma":
+        compute = lambda s: moving_average([bar.close for bar in s], window_days)
+    elif method == "ema":
+        compute = lambda s: ema_series([bar.close for bar in s[-window_days * EMA_WARMUP:]], window_days)[-1]
+    else:
+        raise ValueError(f"지원하지 않는 평균 방식입니다: {method}")
+    return _indicator(history, symbols, as_of, scope, window_days, compute)
+
+
+_MACD_LINES = {"macd": 0, "signal": 1, "histogram": 2}
+
+
+def macd_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                   fast_days: int = 12, slow_days: int = 26, signal_days: int = 9, line: str = "macd",
+                   scope: str = "symbol") -> IndicatorFrame:
+    """indicator.macd. 고른 한 줄(MACD선·시그널·히스토그램)을 낸다. 최근 (장기+시그널) × EMA_WARMUP 봉으로 계산한다."""
+    if line not in _MACD_LINES:
+        raise ValueError(f"지원하지 않는 MACD 값입니다: {line}")
+    window = (slow_days + signal_days) * EMA_WARMUP
+    return _indicator(history, symbols, as_of, scope, slow_days + signal_days - 1,
+                      lambda s: macd([bar.close for bar in s[-window:]], fast_days, slow_days, signal_days)[_MACD_LINES[line]])
+
+
+def bollinger_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                        window_days: int = 20, width: float = 2.0, line: str = "upper",
+                        scope: str = "symbol") -> IndicatorFrame:
+    """indicator.bollinger. 가운데 = 종가 단순이동평균, 상단·하단 = 가운데 ± width × 표준편차(모집단).
+    percent_b = (종가 - 하단) ÷ (상단 - 하단), bandwidth = (상단 - 하단) ÷ 가운데 × 100.
+    가운데 선은 이동평균 구하기와 같아서 따로 내지 않는다."""
+    if window_days < 2 or width <= 0:
+        raise ValueError("볼린저 기간은 2일 이상, 폭은 0보다 커야 합니다.")
+    if line not in ("upper", "lower", "percent_b", "bandwidth"):
+        raise ValueError(f"지원하지 않는 볼린저 값입니다: {line}")
+
+    def compute(series: Sequence[MarketBar]) -> float:
+        closes = [bar.close for bar in series[-window_days:]]
+        middle = sum(closes) / window_days
+        spread = width * (sum((close - middle) ** 2 for close in closes) / window_days) ** 0.5
+        upper, lower = middle + spread, middle - spread
+        if line == "upper":
+            return upper
+        if line == "lower":
+            return lower
+        if line == "percent_b":
+            return (closes[-1] - lower) / (upper - lower) if spread else 0.5
+        return (upper - lower) / middle * 100
+
+    return _indicator(history, symbols, as_of, scope, window_days, compute)
+
+
+def atr_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
+                  period_days: int = 14, unit: str = "price", scope: str = "symbol") -> IndicatorFrame:
+    """indicator.atr. 최근 period_days개 실제 변동폭의 단순평균. unit=percent면 종가 대비 %다."""
+    if period_days < 1:
+        raise ValueError("ATR 기간은 1일 이상이어야 합니다.")
+    if unit not in ("price", "percent"):
+        raise ValueError(f"지원하지 않는 단위입니다: {unit}")
+
+    def compute(series: Sequence[MarketBar]) -> float:
+        tail = series[-(period_days + 1):]
+        ranges = true_ranges([bar.high for bar in tail], [bar.low for bar in tail], [bar.close for bar in tail])
+        value = sum(ranges) / period_days
+        return value / tail[-1].close * 100 if unit == "percent" else value
+
+    return _indicator(history, symbols, as_of, scope, period_days + 1, compute)
 
 
 def price_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,
@@ -303,6 +375,43 @@ _PRICE_MULTIPLES = {
 }
 
 
+# 전년 같은 분기 대비 증가율(%)을 내는 항목 → 계정코드.
+_GROWTH = {"revenue_yoy": "REVENUE", "net_income_yoy": "NET_INCOME", "eps_yoy": "EPS"}
+
+
+def _yoy_growth(fundamentals: Fundamentals, symbol: str, account: str, as_of: datetime) -> float | None:
+    """최근 공시 분기 값 ÷ 전년 같은 분기 값 - 1 (%). 전년 값이 음수면 |전년|으로 나눠 방향을 지킨다.
+    두 분기 모두 as_of까지 공개된 값(정정 포함)을 쓴다. 전년 분기가 없거나 0이면 None."""
+    filings = filings_until(fundamentals, symbol, account, as_of)
+    if not filings:
+        return None
+    latest: dict[str, float] = {filing.fiscal_period: filing.value for filing in filings}
+    period = max(latest)
+    year, quarter = period.split("Q")
+    previous = latest.get(f"{int(year) - 1}Q{quarter}")
+    if not previous:
+        return None
+    return (latest[period] - previous) / abs(previous) * 100
+
+
+def market_cap_universe(history: History, fundamentals: Fundamentals, symbols: Sequence[str], as_of: datetime, *,
+                        min_cap: float = 0, top_n: int = 0) -> UniverseFrame:
+    """universe.market-cap. 시가총액(십억 달러) = 그날 종가 × 최근 공시 발행주식수(백만 주) ÷ 1000.
+    min_cap 미만을 빼고, top_n이 있으면 큰 순서로 그만큼만 남긴다. 종가나 발행주식수가 없는 종목은 뺀다."""
+    if min_cap < 0 or top_n < 0:
+        raise ValueError("시가총액 하한과 상위 종목 수는 0 이상이어야 합니다.")
+    caps: dict[str, float] = {}
+    for symbol in symbols:
+        series = _upto(history, symbol, as_of)
+        shares = filing_as_of(fundamentals, symbol, "SHARES_OUTSTANDING", as_of)
+        if series and shares is not None:
+            caps[symbol] = series[-1].close * shares.value / 1000
+    kept = [symbol for symbol in symbols if symbol in caps and caps[symbol] >= min_cap]
+    if top_n:
+        kept = sorted(sorted(kept, key=lambda symbol: (-caps[symbol], symbol))[:top_n])
+    return _universe(as_of, kept)
+
+
 def fundamental_indicator(history: History, fundamentals: Fundamentals, symbols: Sequence[str], as_of: datetime, *,
                           field: str) -> IndicatorFrame:
     """indicator.fundamental. as_of까지 공개된 공시로 값을 낸다.
@@ -310,7 +419,11 @@ def fundamental_indicator(history: History, fundamentals: Fundamentals, symbols:
     그 밖의 항목은 계정코드(대문자)의 최근 공시값이다. 공시가 모자라거나 분모가 0 이하(적자 PER 등)면 행을 남기지 않는다."""
     rows: list[IndicatorRow] = []
     for symbol in symbols:
-        if field in _PRICE_MULTIPLES:
+        if field in _GROWTH:
+            growth = _yoy_growth(fundamentals, symbol, _GROWTH[field], as_of)
+            if growth is not None:
+                rows.append(IndicatorRow(symbol, growth))
+        elif field in _PRICE_MULTIPLES:
             series = _upto(history, symbol, as_of)
             if not series:
                 continue

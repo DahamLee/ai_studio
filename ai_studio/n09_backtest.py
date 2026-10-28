@@ -63,7 +63,7 @@ class Ledger:
 
     def __init__(
         self, initial_cash: float, *, fee_rate: float = 0.0, slippage_rate: float = 0.0,
-        allow_fractional_shares: bool = False, shortfall: str = "error",
+        allow_fractional_shares: bool = False, shortfall: str = "error", no_trade_band: float = 0.0,
     ) -> None:
         if initial_cash < 0:
             raise StrategyValidationError("initial_cash는 음수일 수 없습니다.")
@@ -72,6 +72,7 @@ class Ledger:
         self.slippage_rate = slippage_rate
         self.allow_fractional_shares = allow_fractional_shares
         self.shortfall = shortfall
+        self.no_trade_band = no_trade_band
         self.cash = initial_cash
         self.holdings: dict[str, PositionState] = {}
         self._peak = initial_cash
@@ -105,7 +106,7 @@ class Ledger:
             result, self.holdings, prices, portfolio_value=value, cash=self.cash,
             rebalance_due=due, fee_rate=self.fee_rate, slippage_rate=self.slippage_rate,
             allow_fractional_shares=self.allow_fractional_shares,
-            processed_event_ids=frozenset(self._processed),
+            processed_event_ids=frozenset(self._processed), no_trade_band=self.no_trade_band,
         )
         fillable = tuple(order for order in orders if order.symbol in next_bars)
         self._skipped.extend(order for order in orders if order.symbol not in next_bars)

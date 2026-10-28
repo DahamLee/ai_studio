@@ -68,6 +68,14 @@ def period_ends(days: Sequence[datetime], frequency: str) -> tuple[datetime, ...
     return tuple(sorted(last.values()))
 
 
+def period_starts(days: Sequence[datetime], frequency: str) -> tuple[datetime, ...]:
+    """각 주기의 첫 거래일. days는 시각순이어야 한다."""
+    first: dict[tuple[int, ...], datetime] = {}
+    for day in days:
+        first.setdefault(period_key(session_date(day), frequency), day)
+    return tuple(sorted(first.values()))
+
+
 def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSettings = RunSettings(),
                        fundamentals: Fundamentals | None = None) -> BacktestResult:
     """fundamentals를 주지 않았는데 재무 블록이 있으면 저장된 재무 CSV(load_fundamentals)를 읽는다."""
@@ -87,11 +95,13 @@ def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSett
         and (settings.end is None or session_date(bar.timestamp) <= settings.end)
     }))
     evaluations = period_ends(days, settings.signal_frequency)
-    due = set(period_ends(evaluations, str(params["rebalanceFrequency"]))) | set(evaluations[:1])
+    pick_days = period_starts if params["rebalanceDay"] == "first" else period_ends
+    due = set(pick_days(evaluations, str(params["rebalanceFrequency"]))) | set(evaluations[:1])
     drift = float(params["driftThresholdPct"]) / 100 or None
     ledger = Ledger(settings.initial_capital, fee_rate=settings.fee_rate,
                     slippage_rate=settings.slippage_rate,
-                    allow_fractional_shares=bool(params["allowFractional"]), shortfall=str(params["shortfall"]))
+                    allow_fractional_shares=bool(params["allowFractional"]), shortfall=str(params["shortfall"]),
+                    no_trade_band=float(params["noTradeBandPct"]) / 100)
     stamps = {symbol: [bar.available_at for bar in series] for symbol, series in history.items()}
 
     evaluation_days = set(evaluations)

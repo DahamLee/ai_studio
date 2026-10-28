@@ -54,8 +54,8 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n07_runtime` | 판단·주문·체결 | `AssetSignal`, `StrategyResult`, `PositionState`, `evaluate_state(targets)`, `evaluate_events(max_positions, priority)`, `generate_orders`, `fill_at_next_open(shortfall)` |
 | `n08_blocks` | 시세 기반 블록 | 유니버스(compose·exclude·min-price), 지표(return·moving-average·price·high·volatility·rsi, `scope`), `market_series`(동일가중 합성 지수), 손절·보유기간 청산 이벤트, 논리 연산 |
 | `n09_backtest` | 원장 | `Ledger.step/mark/result`, `run_backtest`(미리 계산한 판단용), `trade_rows`, `write_trades_csv` |
-| `n10_functions` | 블록 카탈로그 34개 | 단계별 정의, `get_function`, `function_catalog()` |
-| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 34개 |
+| `n10_functions` | 블록 카탈로그 38개 | 단계별 정의, `get_function`, `function_catalog()` |
+| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 38개 |
 | `n12_strategies` | 프리셋·예제 | `PRESETS` 8개, `place()`, 예제 전략 `EXAMPLES` 8개, `graph_dict/graph_from_dict` |
 | `n13_connect` | 연결 검사 | `can_connect`, `validate_graph`, `validate_strategy`(실행 노드 1개·닿지 않는 블록 경고), `check_editor_graph` |
 | `n14_engine` | 그래프 실행기 | `ExecutionContext`, `execute`(직전 거래일 상류 재실행, 빈 결과 경고), `execution_order` |
@@ -63,14 +63,14 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n16_self_check` | 정합성 점검 | 카탈로그=레지스트리, 프리셋·예제 유효성, 핵심 연결 규칙 |
 | `n17_editor_api` | 편집기 진입점 | 표준입력 그래프 JSON → 검증 결과 JSON, `backtest` 인자면 백테스트 요약(수익률·낙폭·평가액 추이)과 매매 내역 전체(`trade_rows`) |
 
-### 3.1 블록 (34개)
+### 3.1 블록 (38개)
 
 캔버스에 보이는 이름은 "○○하기" 형태다. 단계 이름도 같은 형태로 `n02.STAGES`에 있다.
 
 | 단계 | 역할 | 블록 (화면 이름) |
 |---|---|---|
-| 1 종목 고르기 | UNIVERSE | `universe.compose` 종목 불러오기, `universe.exclude` 투자 제외하기, `universe.fundamental` 재무 조건으로 거르기(계정·비교·기준값, 공시일 기준), `universe.min-price` 저가주 빼기 |
-| 2 지표 계산하기 | INDICATOR | `indicator.return` 수익률 구하기, `.moving-average` 이동평균 구하기, `.price` 가격 가져오기, `.high` 기간 고점 구하기, `.volatility` 변동성 구하기, `.rsi` RSI 구하기, `.fundamental` 재무 지표 가져오기* |
+| 1 종목 고르기 | UNIVERSE | `universe.compose` 종목 불러오기, `universe.exclude` 투자 제외하기, `universe.fundamental` 재무 조건으로 거르기(계정·비교·기준값, 공시일 기준), `universe.market-cap` 시가총액으로 거르기(종가 × 최근 공시 발행주식수, 하한·상위 N), `universe.min-price` 저가주 빼기 |
+| 2 지표 계산하기 | INDICATOR | `indicator.return` 수익률 구하기, `.moving-average` 이동평균 구하기(SMA·EMA), `.price` 가격 가져오기, `.high` 기간 고점 구하기, `.volatility` 변동성 구하기, `.rsi` RSI 구하기, `.macd` MACD 구하기(MACD선·시그널·히스토그램 중 하나), `.bollinger` 볼린저 밴드 구하기(상단·하단·%B·밴드폭 중 하나), `.atr` ATR 구하기(가격·종가 대비 %), `.fundamental` 재무 지표 가져오기* |
 | 3 평가하기 | SCORE | `score.from-indicator` 점수 매기기, `score.combine` 점수 합치기 |
 | | CONDITION | `condition.threshold` 기준값과 비교하기, `condition.compare` 두 지표 비교하기 |
 | | LOGIC | `logic.combine` 조건 묶기, `logic.not` 조건 뒤집기, `logic.if-else` 조건에 따라 나누기 |
@@ -80,13 +80,13 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | | CONSTRAINT | `portfolio.max-weight` 비중 상한 두기, `portfolio.cash` 현금 남기기, `portfolio.risk-off` 국면 따라 줄이기 |
 | | TARGET | `portfolio.target` 목표 포트폴리오 만들기 |
 | 6 매매 결정하기 | STRATEGY | `strategy.state` 리밸런싱 하기(← 목표 포트폴리오), `strategy.event` 신호와 보유 비교하기(← 진입·청산 계획) |
-| 7 주문하기 | EXECUTION | `execution.orders` 주기·체결 방식 정하기(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
+| 7 주문하기 | EXECUTION | `execution.orders` 주기·체결 방식 정하기(리밸런스 주기·날짜(주기의 마지막·첫 평가일), 이탈 허용, 무거래 구간, 소수 주문, 현금 부족 처리) |
 
 4단계(매매 대상·신호)와 6단계(매매 결정)의 차이: 4단계는 보유·현금을 모른 채 전체 종목에 대해 "지금이 그 시점이다"만 알린다. 6단계는 현재 보유와 남은 자리를 보고 실제로 살 것·팔 것·둘 것을 정한다. 7단계는 그 결정을 주식 수로 바꿔 다음 거래일 시가에 체결한다. 4단계를 대상·신호 두 단계로 나누지 않는 이유는 둘이 서로 다른 갈래(팩터·시그널)의 같은 순서이기 때문이다. 나누면 팩터 갈래(선정 → 비중)와 시그널 갈래(조건 → 신호) 모두 빈 띠를 건너뛰게 된다. 대신 한 띠 안을 두 칸(`n02.LANES`)으로 나눠, 왼쪽 칸에 SELECTION, 오른쪽 칸에 EVENT를 둔다. 갈래는 지표 종류가 아니라 전략 방식으로 정해진다 — 모멘텀 상위 N(기술적 지표)은 대상 칸, "PER이 10 아래로 내려간 날"(재무 지표)은 신호 칸이다. 리밸런싱은 상태형 갈래에만 있는 개념이라 6단계 상태형 노드 이름(리밸런싱 하기)에만 쓴다.
 
 **선 규칙** (`n13.check_stage_order`, 편집기 `stageOrderProblem`): 선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 앞 단계에서만 받는다. 보조 입력(`PortSpec.auxiliary`)만 단계를 건너뛴다 — 국면 따라 줄이기의 투자 조건(3→5), 지표로 비중 나누기의 지표(2→5), 최대 보유 수로 비중 정하기의 게이트. 편집기는 보조 입력 선을 점선으로 그린다. 판단 노드는 유니버스를 받지 않고, 앞 단계 데이터(목표 종목·신호 종목)와 현재 보유로 판단 대상을 정한다.
 
-\* 재무 공시(`data/sp500_fundamentals_sample.csv`, 예시값)를 업로드일 기준으로 읽는다. PER = 종가 ÷ 최근 4분기 EPS 합, PBR = 종가 ÷ BPS, PSR = 종가 ÷ 최근 4분기 주당매출이고, 나머지 항목은 계정의 최근 공시값이다. 적자로 PER을 정할 수 없거나 공시가 모자라면 값이 없다.
+\* 재무 공시(`data/sp500_fundamentals_sample.csv`, 예시값)를 업로드일 기준으로 읽는다. PER = 종가 ÷ 최근 4분기 EPS 합, PBR = 종가 ÷ BPS, PSR = 종가 ÷ 최근 4분기 주당매출이고, 매출·순이익·EPS 성장률은 최근 공시 분기와 전년 같은 분기를 비교한 %(전년이 적자면 |전년|으로 나눈다)이고, 나머지 항목은 계정의 최근 공시값이다. 값이 여러 줄인 지표(MACD·볼린저)는 '값' 파라미터로 한 줄만 내 출력 포트를 하나로 유지한다. 지수이동평균은 최근 기간×3 봉으로 계산한다(`n08.EMA_WARMUP`). 적자로 PER을 정할 수 없거나 공시가 모자라면 값이 없다.
 
 재무로 거르는 자리는 둘이다. 1단계 `universe.fundamental`은 지표를 계산하기 **전에** 모집단을 줄여 순위·백분위가 거른 종목 안에서 매겨진다. 2→3→4단계(`indicator.fundamental` → `condition.threshold` → `selection.top-n`의 대상 조건 또는 `allocation.event-slots`의 게이트)는 순위를 전체 종목으로 낸 뒤 **고를 때만** 거른다. 예제 `quality-momentum`이 앞의 방식, `momentum-quality-pick`이 뒤의 방식이다.
 
