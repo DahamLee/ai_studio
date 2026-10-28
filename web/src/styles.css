@@ -154,6 +154,19 @@ h1 { margin: 0; font-size: 1.125rem; }
   z-index: 1;
 }
 .cn:hover { border-color: #8b97a3; }
+/* 묶음 틀: 같은 단계의 입력을 받아 합치는 노드(점수 합치기·조건 묶기·조건에 따라 나누기). */
+.grp { position: absolute; border: 1.5px dashed #8fb8e3; border-radius: 12px; background: rgba(8, 117, 209, 0.05); }
+.grp.sel { border-color: #0875d1; border-style: solid; box-shadow: 0 0 0 3px #d7ebfb; }
+.grp-h { display: flex; align-items: center; gap: 0.5rem; height: 24px; padding: 0 0.5rem 0 0.625rem; cursor: pointer; }
+.grp-h b { font-size: 0.8125rem; white-space: nowrap; }
+.grp-h span { flex: 1; min-width: 0; color: #4a5a6a; font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grp-h button { margin-left: auto; border: 0; background: transparent; color: #7b868f; cursor: pointer; font-size: 0.875rem; }
+.grp-h button:hover { color: #b42318; }
+.grp-tag {
+  position: absolute; height: 16px; padding: 0 0.4rem; border: 0; border-radius: 8px;
+  background: #e3effb; color: #0b5cab; font-size: 0.625rem; font-weight: 700; cursor: pointer; z-index: 2;
+}
+.grp-tag:hover { background: #fde8e6; color: #b42318; text-decoration: line-through; }
 .cn.sel { border-color: #0875d1; box-shadow: 0 0 0 3px #d7ebfb; }
 .cn.wall { border-color: #b42318; box-shadow: 0 0 0 3px #f8d6d2; }
 .cn-h { display: flex; align-items: center; gap: 0.375rem; }

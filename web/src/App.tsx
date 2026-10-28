@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { acceptedTypes, laneIndex, layoutColumns, resolveOutputType, stageIndex, stageOrderProblem } from "./layers";
+import { acceptedTypes, laneIndex, layoutColumns, mergeGroups, resolveOutputType, stageIndex, stageOrderProblem } from "./layers";
 import type { BacktestReport, BlockFunction, Catalog, GraphCheck, GraphEdge, Param, ParamValue, Port, Preset, Stage } from "./types";
 
 type CanvasNode = {
@@ -16,7 +16,13 @@ const NODE_W = 176;
 const NODE_H = 88;
 const X0 = 24;
 const COL_GAP = 20;
-const BAND_MIN = 132;
+const BAND_MIN = 150;
+// 묶음 틀: 위에 이름 줄, 아래에 입력 자리 표시 줄.
+const GROUP_HEAD = 26;
+const GROUP_PAD = 8;
+const GROUP_FOOT = 20;
+
+type Rect = { x: number; y: number; w: number; h: number };
 const BAND_HEAD = 30;
 
 function nextInstanceId(base: string, used: Set<string>) {
@@ -45,6 +51,30 @@ function homeY(index: number, bandH: number) {
 function portOffset(index: number, count: number) {
   if (count <= 1) return NODE_W / 2;
   return 28 + (index * (NODE_W - 56)) / (count - 1);
+}
+
+/** 묶음 틀의 포트는 틀 너비에 고르게 놓는다. */
+function framePortOffset(index: number, count: number, width: number) {
+  return ((index + 1) * width) / (count + 1);
+}
+
+/** 묶음 틀 머리에 보일 파라미터 요약. 선택지는 이름으로, 숫자는 단위와 함께. */
+function paramSummary(fn: BlockFunction, params: Record<string, ParamValue>) {
+  return fn.params.map((param) => {
+    const value = params[param.key] ?? param.default;
+    if (param.options.length) return param.options.find((option) => option.value === value)?.label ?? String(value);
+    return `${param.label} ${value}${param.unit ?? ""}`;
+  }).join(" · ");
+}
+
+/** 묶음 안 입력 노드 아래 표시. 점수 합치기는 비율까지 보인다. */
+function memberTag(fn: BlockFunction, params: Record<string, ParamValue>, portKey: string) {
+  const label = fn.inputs.find((port) => port.key === portKey)?.label ?? portKey;
+  if (fn.id === "score.combine") {
+    const left = Number(params.leftWeightPct ?? 50);
+    return `${label} ${portKey === "left" ? left : 100 - left}%`;
+  }
+  return label;
 }
 
 /** 아래 출력에서 위 입력으로 내려가는 선. */
@@ -97,6 +127,55 @@ export function App() {
     const stage = stages[indexOf(functionId)];
     return stage?.lanes.length ? stage.lanes[laneOf(functionId)]?.label : stage?.label;
   };
+
+  const bandOfNode = (id: string, list: CanvasNode[] = nodes) => {
+    const node = list.find((item) => item.instanceId === id);
+    return node ? indexOf(node.functionId) : 0;
+  };
+  const groupsOf = (list: CanvasNode[], edgeList: GraphEdge[]) => mergeGroups(
+    list.map((node) => node.instanceId),
+    (id) => bandOfNode(id, list),
+    edgeList,
+    (edge) => fnOfNode(edge.to, list)?.inputs.findIndex((port) => port.key === edge.toPort) ?? 0,
+  );
+  const groups = groupsOf(nodes, edges);
+
+  /** 묶음 틀의 자리. 입력 노드(안쪽 묶음이면 그 틀)를 감싼다. */
+  const frames = new Map<string, Rect>();
+  function rectOf(id: string): Rect | null {
+    const members = groups.get(id);
+    if (!members) {
+      const node = nodes.find((item) => item.instanceId === id);
+      return node ? { x: node.x, y: node.y, w: NODE_W, h: NODE_H } : null;
+    }
+    if (!frames.has(id)) {
+      const rects = members.map(rectOf).filter((rect): rect is Rect => rect !== null);
+      const left = Math.min(...rects.map((rect) => rect.x)) - GROUP_PAD;
+      const top = Math.min(...rects.map((rect) => rect.y)) - GROUP_HEAD;
+      const right = Math.max(...rects.map((rect) => rect.x + rect.w)) + GROUP_PAD;
+      const bottom = Math.max(...rects.map((rect) => rect.y + rect.h)) + GROUP_FOOT;
+      frames.set(id, { x: left, y: top, w: right - left, h: bottom - top });
+    }
+    return frames.get(id)!;
+  }
+  for (const id of groups.keys()) rectOf(id);
+  const portX = (id: string, index: number, count: number) => {
+    const frame = frames.get(id);
+    return frame ? framePortOffset(index, count, frame.w) : portOffset(index, count);
+  };
+
+  // 묶음이 풀리면(입력을 끊거나 지움) 숨어 있던 노드를 옛 틀 오른쪽에 꺼내 놓는다.
+  const framesRef = useRef(new Map<string, Rect>());
+  useEffect(() => {
+    const previous = framesRef.current;
+    framesRef.current = new Map(frames);
+    const released = [...previous].filter(([id]) => !frames.has(id) && nodes.some((node) => node.instanceId === id));
+    if (!released.length) return;
+    setNodes((current) => current.map((node) => {
+      const frame = released.find(([id]) => id === node.instanceId)?.[1];
+      return frame ? { ...node, x: frame.x + frame.w + COL_GAP, y: frame.y + GROUP_HEAD } : node;
+    }));
+  });
 
   /** 칸이 나뉜 띠에서 노드가 옆 칸으로 넘어가지 않는 x 범위. 칸이 없거나 옆 칸이 비어 있으면 제한이 없다. */
   function laneRange(node: CanvasNode, list: CanvasNode[]) {
@@ -246,7 +325,8 @@ export function App() {
   function arrange(list: CanvasNode[], edgeList: GraphEdge[]) {
     const band = new Map(list.map((node) => [node.instanceId, indexOf(node.functionId)]));
     const lane = new Map(list.map((node) => [node.instanceId, laneOf(node.functionId)]));
-    const columns = layoutColumns(list.map((node) => node.instanceId), (id) => band.get(id) ?? 0, edgeList, (id) => lane.get(id) ?? 0);
+    const columns = layoutColumns(list.map((node) => node.instanceId), (id) => band.get(id) ?? 0, edgeList,
+                                  (id) => lane.get(id) ?? 0, groupsOf(list, edgeList));
     return list.map((node) => ({
       ...node,
       x: X0 + (columns.get(node.instanceId) ?? 0) * (NODE_W + COL_GAP),
@@ -277,7 +357,10 @@ export function App() {
 
   function addPreset(preset: Preset) {
     const used = new Set(nodes.map((node) => node.instanceId));
-    const prefix = nextInstanceId(preset.id.replaceAll("-", "_"), used);
+    // 프리셋 안 노드 id는 '접두사_노드'다. 같은 프리셋을 또 넣으면 접두사에 번호를 붙여 겹치지 않게 한다.
+    const base = preset.id.replaceAll("-", "_");
+    let prefix = base;
+    for (let index = 2; preset.nodes.some((inner) => used.has(`${prefix}_${inner.id}`)); index += 1) prefix = `${base}_${index}`;
     const name = (local: string) => `${prefix}_${local}`;
     const list = [...nodes];
     for (const inner of preset.nodes) {
@@ -378,7 +461,7 @@ export function App() {
 
   const selected = nodes.find((node) => node.instanceId === selectedId) ?? null;
   const selectedFn = selected ? byId.get(selected.functionId) : null;
-  const boardWidth = Math.max(720, ...nodes.map((node) => node.x + NODE_W + X0));
+  const boardWidth = Math.max(720, ...nodes.map((node) => node.x + NODE_W + X0), ...[...frames.values()].map((frame) => frame.x + frame.w + X0));
   const boardHeight = bandH * Math.max(stages.length, 1);
 
   function onBoardDrop(event: React.DragEvent) {
@@ -614,12 +697,15 @@ export function App() {
                   const fromFn = from ? byId.get(from.functionId) : undefined;
                   const toFn = to ? byId.get(to.functionId) : undefined;
                   if (!from || !to || !fromFn || !toFn) return null;
+                  if (groups.get(edge.to)?.includes(edge.from)) return null;  // 묶음 안의 선은 틀과 자리 표시로 대신한다.
+                  const a = rectOf(edge.from)!;
+                  const b = rectOf(edge.to)!;
                   const outIndex = fromFn.outputs.findIndex((port) => port.key === edge.fromPort);
                   const inIndex = toFn.inputs.findIndex((port) => port.key === edge.toPort);
                   const d = stageIndex(stages, fromFn) === stageIndex(stages, toFn)
-                    ? sideways(from.x + NODE_W, from.y + NODE_H / 2, to.x, to.y + NODE_H / 2)
-                    : curve(from.x + portOffset(outIndex, fromFn.outputs.length), from.y + NODE_H,
-                            to.x + portOffset(inIndex, toFn.inputs.length), to.y);
+                    ? sideways(a.x + a.w, a.y + a.h / 2, b.x, b.y + b.h / 2)
+                    : curve(a.x + portX(edge.from, outIndex, fromFn.outputs.length), a.y + a.h,
+                            b.x + (frames.has(edge.to) ? b.w / 2 : portX(edge.to, inIndex, toFn.inputs.length)), b.y);
                   const auxiliary = toFn.inputs[inIndex]?.auxiliary ?? false;
                   return (
                     <path
@@ -634,9 +720,66 @@ export function App() {
                   );
                 })}
               </svg>
+              {[...frames].map(([id, frame]) => {
+                const node = nodes.find((item) => item.instanceId === id);
+                const fn = node ? byId.get(node.functionId) : undefined;
+                if (!node || !fn) return null;
+                const summary = paramSummary(fn, node.params);
+                return (
+                  <section
+                    key={id}
+                    role="group"
+                    aria-label={fn.name}
+                    className={id === selectedId ? "grp sel" : "grp"}
+                    style={{ left: frame.x, top: frame.y, width: frame.w, height: frame.h }}
+                  >
+                    <Ports
+                      ports={fn.inputs.filter((port) => port.multiple || !edges.some((edge) => edge.to === id && edge.toPort === port.key))}
+                      side="in"
+                      width={frame.w}
+                      pending={null}
+                      onPick={(port) => onPortClick(node, port, "in")}
+                    />
+                    <div className="grp-h" onClick={() => setSelectedId(id)}>
+                      <b>{fn.name}</b>
+                      {summary ? <span>{summary}</span> : null}
+                      <button type="button" aria-label={`${fn.name} 빼기`} onClick={(event) => { event.stopPropagation(); removeNode(id); }}>×</button>
+                    </div>
+                    <Ports
+                      ports={fn.outputs}
+                      side="out"
+                      width={frame.w}
+                      pending={pending?.node === id ? pending.port : null}
+                      onPick={(port) => onPortClick(node, port, "out")}
+                    />
+                  </section>
+                );
+              })}
+              {[...groups].flatMap(([id, members]) => {
+                const node = nodes.find((item) => item.instanceId === id);
+                const fn = node ? byId.get(node.functionId) : undefined;
+                if (!node || !fn) return [];
+                return members.map((member) => {
+                  const rect = rectOf(member);
+                  const links = edges.filter((edge) => edge.from === member && edge.to === id);
+                  if (!rect || !links.length) return null;
+                  return (
+                    <button
+                      type="button"
+                      key={`${id}:${member}`}
+                      className="grp-tag"
+                      style={{ left: rect.x, top: rect.y + rect.h + 3 }}
+                      title={`${member} → ${fn.name} (눌러서 묶음에서 빼기)`}
+                      onClick={() => setEdges((current) => current.filter((edge) => !links.some((link) => edgeKey(link) === edgeKey(edge))))}
+                    >
+                      {links.map((link) => memberTag(fn, node.params, link.toPort)).join(" · ")}
+                    </button>
+                  );
+                });
+              })}
               {nodes.map((node) => {
                 const fn = byId.get(node.functionId);
-                if (!fn) return null;
+                if (!fn || groups.has(node.instanceId)) return null;
                 const walled = dragRef.current?.id === node.instanceId && dragRef.current.blocked;
                 const classes = ["cn", node.instanceId === selectedId ? "sel" : "", walled ? "wall" : ""].filter(Boolean).join(" ");
                 return (
@@ -905,11 +1048,12 @@ function BacktestPanel({ report, stale, tradesShown, onShowTrades, onClose }: {
   );
 }
 
-function Ports({ ports, side, pending, onPick }: {
+function Ports({ ports, side, pending, onPick, width }: {
   ports: Port[];
   side: "in" | "out";
   pending: string | null;
   onPick: (port: Port) => void;
+  width?: number;  // 묶음 틀이면 틀 너비
 }) {
   return (
     <>
@@ -920,7 +1064,7 @@ function Ports({ ports, side, pending, onPick }: {
           className={["cport", side, pending === port.key ? "pending" : "", port.required ? "" : "optional"].filter(Boolean).join(" ")}
           title={`${port.label} · ${port.key} · ${acceptedTypes(port).join(", ")}${port.required ? "" : " (선택)"}`}
           aria-label={`${port.label} ${side === "in" ? "입력" : "출력"}`}
-          style={{ left: portOffset(index, ports.length) }}
+          style={{ left: width ? framePortOffset(index, ports.length, width) : portOffset(index, ports.length) }}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => { event.stopPropagation(); onPick(port); }}
         />
