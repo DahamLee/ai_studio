@@ -7,6 +7,7 @@
 import csv
 from bisect import bisect_right
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,11 +15,40 @@ from zoneinfo import ZoneInfo
 from ai_studio.n01_frames import MarketBar, StrategyValidationError
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "sp500_ohlc_1y.csv"
+FUNDAMENTALS_PATH = Path(__file__).resolve().parents[1] / "data" / "sp500_fundamentals_sample.csv"
 EXCHANGE_TZ = ZoneInfo("America/New_York")
 SESSION_OPEN = time(9, 30)
 SESSION_CLOSE = time(16, 0)
 
 History = Mapping[str, Sequence[MarketBar]]
+
+# 재무 계정코드 → (화면 이름, 단위). 값은 공시된 단위 그대로다. 비율은 퍼센트 값(10%는 10.0).
+FUNDAMENTAL_ACCOUNTS: dict[str, tuple[str, str]] = {
+    "ROE": ("ROE", "%"),
+    "ROA": ("ROA", "%"),
+    "DEBT_RATIO": ("부채비율", "%"),
+    "EPS": ("주당순이익(분기)", "달러"),
+    "BPS": ("주당순자산", "달러"),
+    "REVENUE": ("매출액(분기)", "백만 달러"),
+    "NET_INCOME": ("순이익(분기)", "백만 달러"),
+    "TOTAL_ASSETS": ("자산총계", "백만 달러"),
+    "TOTAL_LIABILITIES": ("부채총계", "백만 달러"),
+    "TOTAL_EQUITY": ("자본총계", "백만 달러"),
+    "SHARES_OUTSTANDING": ("발행주식수", "백만 주"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Filing:
+    """한 종목·한 계정의 분기 공시값. available_at부터 쓸 수 있다."""
+
+    available_at: datetime
+    fiscal_period: str
+    value: float
+
+
+# 종목 → 계정코드 → 공개시각 순 공시.
+Fundamentals = Mapping[str, Mapping[str, Sequence[Filing]]]
 
 
 def session_open(day: date) -> datetime:
@@ -57,6 +87,28 @@ def load_ohlc(path: Path = DATA_PATH) -> tuple[MarketBar, ...]:
             )
             for row in csv.DictReader(handle)
         )
+
+
+def load_fundamentals(path: Path = FUNDAMENTALS_PATH) -> dict[str, dict[str, tuple[Filing, ...]]]:
+    """long 형식 재무 CSV(symbol, account_code, value, unit, fiscal_period, fiscal_date, upload_date)를 읽는다.
+    업로드일 장 마감에 공개된 것으로 본다. 그날 종가 평가부터 쓰고, 체결은 다음 거래일 시가다.
+    회계 기준일(fiscal_date)은 시점 판단에 쓰지 않는다. 쓰면 공개 전 실적을 미리 보게 된다."""
+    grouped: dict[str, dict[str, list[Filing]]] = {}
+    with path.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            filing = Filing(session_close(row["upload_date"]), row["fiscal_period"], float(row["value"]))
+            grouped.setdefault(row["symbol"], {}).setdefault(row["account_code"], []).append(filing)
+    return {
+        symbol: {code: tuple(sorted(items, key=lambda item: item.available_at)) for code, items in accounts.items()}
+        for symbol, accounts in grouped.items()
+    }
+
+
+def filing_as_of(fundamentals: Fundamentals, symbol: str, account: str, as_of: datetime) -> Filing | None:
+    """as_of까지 공개된 가장 최근 공시. 정정 공시가 나중에 올라오면 그때부터 정정값이다."""
+    filings = fundamentals.get(symbol, {}).get(account, ())
+    index = bisect_right(filings, as_of, key=lambda item: item.available_at)
+    return filings[index - 1] if index else None
 
 
 def history_from_bars(bars: Iterable[MarketBar]) -> dict[str, tuple[MarketBar, ...]]:

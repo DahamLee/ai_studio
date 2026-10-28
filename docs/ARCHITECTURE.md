@@ -47,15 +47,15 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 |---|---|---|
 | `n01_frames` | 기본 타입 | `StrategyValidationError`, `MarketBar`(OHLCV·`timestamp`·`available_at`·`open_at`), `UniverseFrame(as_of, symbols)`, Score·Indicator·Condition·Event·Selection·Weight 프레임, `TargetPortfolio` |
 | `n02_schema` | 블록 계약 | `PortSpec`(accepts·same_type_as·mirrors), `ParamSpec`, `FunctionSpec`(role·needs_previous·lookback), `STAGES`(역할→단계 띠), `RUN_CONTEXT`, 그래프 타입 |
-| `n03_market_data` | 시세·거래소 시각 | `load_ohlc`, `daily_bar`, `history_from_bars`(중복 거부), `bars_until`(bisect), `session_open/close/date`(America/New_York) |
+| `n03_market_data` | 시세·재무·거래소 시각 | `load_ohlc`, `load_fundamentals`·`filing_as_of`(업로드일 장 마감 공개, bisect), `daily_bar`, `history_from_bars`(중복 거부), `bars_until`(bisect), `session_open/close/date`(America/New_York) |
 | `n04_indicators` | 순수 지표 수학 | `moving_average`, `window_high`, `rsi`, `total_return`, `daily_returns`, `stdev` |
 | `n05_signals` | 조건·이벤트 | `compare_threshold`, `compare_indicators`(MARKET 펼침), `negate`, `transition_events` |
 | `n06_portfolio` | 점수 이후 단계 | `score_from_indicator`(raw·rank·zscore), `combine_scores`, `select_top_n(_with_buffer)`, `select_min_score`, `select_matched`, `weight_equal/by_score/by_indicator`, `cap_max_weight`, `apply_cash_weight`, `scale_when_false`, `to_target_portfolio` |
 | `n07_runtime` | 판단·주문·체결 | `AssetSignal`, `StrategyResult`, `PositionState`, `evaluate_state(targets)`, `evaluate_events(max_positions, priority)`, `generate_orders`, `fill_at_next_open(shortfall)` |
 | `n08_blocks` | 시세 기반 블록 | 유니버스(compose·exclude·min-price), 지표(return·moving-average·price·high·volatility·rsi, `scope`), `market_series`(동일가중 합성 지수), 손절·보유기간 청산 이벤트, 논리 연산 |
 | `n09_backtest` | 원장 | `Ledger.step/mark/result`, `run_backtest`(미리 계산한 판단용), `trade_rows`, `write_trades_csv` |
-| `n10_functions` | 블록 카탈로그 33개 | 단계별 정의, `get_function`, `function_catalog()` |
-| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 33개 |
+| `n10_functions` | 블록 카탈로그 34개 | 단계별 정의, `get_function`, `function_catalog()` |
+| `n11_registry` | 블록 id → 핸들러 | `register`, `get_handler`, `ExecutionContext` 타입의 핸들러 34개 |
 | `n12_strategies` | 프리셋·예제 | `PRESETS` 8개, `place()`, 예제 전략 `EXAMPLES` 8개, `graph_dict/graph_from_dict` |
 | `n13_connect` | 연결 검사 | `can_connect`, `validate_graph`, `validate_strategy`(실행 노드 1개·닿지 않는 블록 경고), `check_editor_graph` |
 | `n14_engine` | 그래프 실행기 | `ExecutionContext`, `execute`(직전 거래일 상류 재실행, 빈 결과 경고), `execution_order` |
@@ -63,13 +63,13 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | `n16_self_check` | 정합성 점검 | 카탈로그=레지스트리, 프리셋·예제 유효성, 핵심 연결 규칙 |
 | `n17_editor_api` | 편집기 진입점 | 표준입력 그래프 JSON → 검증 결과 JSON, `backtest` 인자면 백테스트 요약(수익률·낙폭·평가액 추이)과 매매 내역 전체(`trade_rows`) |
 
-### 3.1 블록 (33개)
+### 3.1 블록 (34개)
 
 캔버스에 보이는 이름은 "○○하기" 형태다. 단계 이름도 같은 형태로 `n02.STAGES`에 있다.
 
 | 단계 | 역할 | 블록 (화면 이름) |
 |---|---|---|
-| 1 종목 고르기 | UNIVERSE | `universe.compose` 종목 불러오기, `universe.exclude` 투자 제외하기, `universe.min-price` 저가주 빼기 |
+| 1 종목 고르기 | UNIVERSE | `universe.compose` 종목 불러오기, `universe.exclude` 투자 제외하기, `universe.fundamental` 재무 조건으로 거르기(계정·비교·기준값, 공시일 기준), `universe.min-price` 저가주 빼기 |
 | 2 지표 계산하기 | INDICATOR | `indicator.return` 수익률 구하기, `.moving-average` 이동평균 구하기, `.price` 가격 가져오기, `.high` 기간 고점 구하기, `.volatility` 변동성 구하기, `.rsi` RSI 구하기, `.fundamental` 재무 지표 가져오기* |
 | 3 평가하기 | SCORE | `score.from-indicator` 점수 매기기, `score.combine` 점수 합치기 |
 | | CONDITION | `condition.threshold` 기준값과 비교하기, `condition.compare` 두 지표 비교하기 |

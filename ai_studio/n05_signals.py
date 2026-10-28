@@ -7,7 +7,7 @@ from datetime import datetime
 
 from ai_studio.n01_frames import ConditionFrame, ConditionRow, EventFrame, EventRow, IndicatorFrame
 
-_OPERATORS = {
+OPERATORS = {
     "lt": lambda value, threshold: value < threshold,
     "lte": lambda value, threshold: value <= threshold,
     "gt": lambda value, threshold: value > threshold,
@@ -18,7 +18,7 @@ _OPERATORS = {
 def compare_threshold(indicators: IndicatorFrame, operator: str, threshold: float) -> ConditionFrame:
     """지표가 임계값을 만족하면 참. 만족하지 않은 종목도 거짓 행으로 남긴다."""
     try:
-        predicate = _OPERATORS[operator]
+        predicate = OPERATORS[operator]
     except KeyError as error:
         raise ValueError(f"지원하지 않는 비교입니다: {operator}") from error
     return ConditionFrame(tuple(
@@ -35,7 +35,7 @@ def compare_indicators(
     """left (연산자) right × (1 + offset%). 한쪽이 시장 한 줄이면 다른 쪽 모든 종목에 펼친다.
     양쪽에 다 있는 종목만 행이 된다."""
     try:
-        predicate = _OPERATORS[operator]
+        predicate = OPERATORS[operator]
     except KeyError as error:
         raise ValueError(f"지원하지 않는 비교입니다: {operator}") from error
     lefts = {row.instrument_id: row.value for row in left.rows}

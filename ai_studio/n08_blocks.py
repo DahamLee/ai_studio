@@ -22,7 +22,8 @@ from ai_studio.n01_frames import (
     WeightFrame,
     WeightRow,
 )
-from ai_studio.n03_market_data import History, bars_until, session_date
+from ai_studio.n03_market_data import Fundamentals, History, bars_until, filing_as_of, session_date
+from ai_studio.n05_signals import OPERATORS
 from ai_studio.n04_indicators import daily_returns, moving_average, rsi, stdev, total_return, window_high
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
 
@@ -32,6 +33,27 @@ def compose_universe(history: History, as_of: datetime) -> UniverseFrame:
     """universe.compose. as_of까지 봉이 하나라도 공개된 종목. 아직 상장하지 않은 종목은 넣지 않는다."""
     symbols = tuple(sorted(symbol for symbol in history if _upto(history, symbol, as_of)))
     return _universe(as_of, symbols)
+
+
+def fundamental_universe(
+    fundamentals: Fundamentals,
+    symbols: Sequence[str],
+    as_of: datetime,
+    *,
+    account: str,
+    operator: str,
+    threshold: float,
+) -> UniverseFrame:
+    """universe.fundamental. as_of까지 공개된 가장 최근 분기 값으로 거른다. 공시가 없는 종목은 뺀다."""
+    compare = OPERATORS.get(operator)
+    if compare is None:
+        raise ValueError(f"지원하지 않는 비교입니다: {operator}")
+    kept = [
+        symbol for symbol in symbols
+        if (filing := filing_as_of(fundamentals, symbol, account, as_of)) is not None
+        and compare(filing.value, threshold)
+    ]
+    return _universe(as_of, kept)
 
 
 def exclude_universe(

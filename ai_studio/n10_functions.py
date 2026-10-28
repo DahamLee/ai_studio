@@ -6,7 +6,9 @@
 """
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 
+from ai_studio.n03_market_data import FUNDAMENTAL_ACCOUNTS
 from ai_studio.n02_schema import (
     LANES, PORT_TYPE_LABEL, RUN_CONTEXT, STAGES, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData, stage_of,
 )
@@ -77,6 +79,19 @@ _UNIVERSE: tuple[FunctionSpec, ...] = (
         ),
         role="UNIVERSE", required_data=RequiredData(("close", "volume"), 0, "1d"),
         lookback=lambda p: int(p["minListingDays"]),
+    ),
+    FunctionSpec(
+        id="universe.fundamental", name="재무 조건으로 거르기", category="universe", category_label="유니버스",
+        summary="평가일까지 공시된 가장 최근 분기 재무값으로 종목을 거른다. 공시일(업로드일) 기준이라 아직 나오지 않은 실적은 보지 않는다. 공시가 없는 종목은 뺀다. 조건이 여럿이면 이 노드를 이어 붙인다.",
+        inputs=(_UNIVERSE_IN,), outputs=(_UNIVERSE_OUT,),
+        params=(
+            ParamSpec("account", "계정", "enum", "비교할 재무 계정.", "ROE",
+                      options=_opts(*((code, f"{label} ({unit})") for code, (label, unit) in FUNDAMENTAL_ACCOUNTS.items()))),
+            replace(_OPERATOR, default="gte", description="계정 값과 기준값을 비교하는 방법."),
+            ParamSpec("threshold", "기준값", "number",
+                      "계정 단위 그대로 쓴다. ROE·ROA·부채비율은 퍼센트 값(10%는 10), 금액은 백만 달러.", 10),
+        ),
+        role="UNIVERSE", required_data=RequiredData(("fundamental",), 0, "1q"),
     ),
     FunctionSpec(
         id="universe.min-price", name="저가주 빼기", category="universe", category_label="유니버스",

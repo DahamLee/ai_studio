@@ -6,12 +6,13 @@ from ai_studio.n08_blocks import (
     combine_conditions,
     compose_universe,
     exclude_universe,
+    fundamental_universe,
     min_price_universe,
     if_else_score,
     rsi_indicator,
 )
 from ai_studio.n01_frames import MarketBar, ScoreFrame, ScoreRow, SelectionFrame, SelectionRow, ConditionFrame, ConditionRow, WeightFrame, WeightRow
-from ai_studio.n03_market_data import daily_bar, history_from_bars, session_close as at
+from ai_studio.n03_market_data import Filing, daily_bar, history_from_bars, session_close as at
 
 
 def bars(symbol: str, closes: list[float], *, high: list[float] | None = None, volume: float = 1_000) -> list[MarketBar]:
@@ -40,6 +41,23 @@ class BlockTests(unittest.TestCase):
         self.assertEqual(kept.symbols, ("LONG",))
         with self.assertRaisesRegex(ValueError, "순이익"):
             exclude_universe(history, universe.symbols, at("2026-01-04"), exclude_loss_making=True)
+
+    def test_fundamental_universe_uses_the_latest_filing_published_by_then(self):
+        # 2025Q3 실적(ROE 5)은 분기 말이 아니라 업로드일(11-14) 장 마감부터 보인다.
+        fundamentals = {
+            "AAA": {"ROE": (Filing(at("2025-08-13"), "2025Q2", 25.0), Filing(at("2025-11-14"), "2025Q3", 5.0))},
+            "BBB": {"ROE": (Filing(at("2025-08-13"), "2025Q2", 12.0),)},
+            "NEW": {"ROE": (Filing(at("2025-11-20"), "2025Q3", 40.0),)},
+        }
+        symbols = ("AAA", "BBB", "NEW", "NONE")
+        before = fundamental_universe(fundamentals, symbols, at("2025-11-13"), account="ROE", operator="gte", threshold=10)
+        after = fundamental_universe(fundamentals, symbols, at("2025-11-14"), account="ROE", operator="gte", threshold=10)
+        self.assertEqual(before.symbols, ("AAA", "BBB"))  # NEW는 아직 공시 전, NONE은 공시 없음
+        self.assertEqual(after.symbols, ("BBB",))
+        low = fundamental_universe(fundamentals, symbols, at("2025-11-14"), account="ROE", operator="lt", threshold=10)
+        self.assertEqual(low.symbols, ("AAA",))
+        with self.assertRaisesRegex(ValueError, "비교"):
+            fundamental_universe(fundamentals, symbols, at("2025-11-14"), account="ROE", operator="eq", threshold=10)
 
     def test_min_price_keeps_closes_at_or_above_the_floor(self):
         history = history_from_bars(

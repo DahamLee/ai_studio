@@ -10,7 +10,7 @@ from datetime import datetime
 
 from ai_studio.n13_connect import validate_graph
 from ai_studio.n10_functions import get_function
-from ai_studio.n03_market_data import History
+from ai_studio.n03_market_data import Fundamentals, History
 from ai_studio.n11_registry import get_handler
 from ai_studio.n07_runtime import PositionState
 from ai_studio.n02_schema import FunctionSpec, StrategyGraph, StrategyNode
@@ -26,6 +26,8 @@ class ExecutionContext:
     positions: Mapping[str, PositionState] = field(default_factory=dict)
     # needs_previous 블록에만 채워진다. 같은 입력 포트의 직전 거래일 값이다. 직전 거래일이 없으면 None.
     previous_inputs: Mapping[str, object] | None = None
+    # 분기 재무 공시. 재무 블록이 있는 그래프에만 채운다(run_graph_backtest가 읽는다).
+    fundamentals: Fundamentals | None = None
 
     def __post_init__(self) -> None:
         require_tz(self.as_of, "context.as_of")

@@ -8,7 +8,7 @@
 
 | 단계 | 역할 | 입력 → 출력 | 예 |
 |---|---|---|---|
-| 1 종목 고르기 | UNIVERSE | → `universe` | 종목 불러오기, 투자 제외하기, 저가주 빼기 |
+| 1 종목 고르기 | UNIVERSE | → `universe` | 종목 불러오기, 투자 제외하기, 재무 조건으로 거르기, 저가주 빼기 |
 | 2 지표 계산하기 | INDICATOR | `universe` → `indicator` | 수익률·이동평균·가격·기간 고점·변동성·RSI 구하기 (종목·시장 범위) |
 | 3 평가하기 | SCORE / CONDITION / LOGIC | `indicator` → `score`·`condition` | 점수 매기기·합치기, 기준값·두 지표 비교하기, 조건 묶기·뒤집기 |
 | 4 매매 대상 정하기 \| 매매 신호 잡기 | SELECTION / EVENT | → `selection`·`event` | 대상: 상위 N개 고르기(대상 조건, 보유 유지 버퍼), 점수 기준으로 고르기, 조건 맞는 종목 고르기 · 신호: 진입·청산 시점 잡기, 손절·익절 시점 잡기, 보유기간 만료 시점 잡기 |
@@ -82,7 +82,7 @@ print(result.warnings)   # 데이터가 모자라 빈 지표·점수가 있으�
 
 ```bash
 python -m ai_studio.n16_self_check            # 카탈로그·레지스트리·프리셋·예제 정합성
-python -m unittest discover -s tests -v       # 저장된 일봉이 있으면 예제 8개 백테스트 포함
+python -m unittest discover -s tests -v       # 저장된 일봉이 있으면 예제 9개 백테스트 포함
 PYTHONPATH=. .venv/bin/python scripts/run_momentum_backtest.py
 PYTHONPATH=. .venv/bin/python scripts/preview_blocks.py
 
@@ -104,6 +104,7 @@ cd web && npm install && npm run dev          # 편집기. /api/validate·/api/b
 
 - `fiscal_date`는 공시가 적용되는 회계 기준일(분기 말), `upload_date`는 공시가 실제로 올라온 날입니다. 2025Q3 실적은 2025-11-14부터 쓸 수 있습니다.
 - 계정코드: REVENUE, NET_INCOME, TOTAL_ASSETS, TOTAL_LIABILITIES, TOTAL_EQUITY, SHARES_OUTSTANDING(백만 단위), EPS, BPS(달러), ROE, ROA, DEBT_RATIO(퍼센트 값, 10%는 10.0). ROE·ROA는 최근 4분기 순이익 기준입니다.
+- 1단계 **재무 조건으로 거르기**(`universe.fundamental`)가 이 표를 씁니다. 평가일마다 그날까지 올라온 가장 최근 분기 값으로 거르고(예: ROE 20 이상, 부채비율 200 이하), 공시가 없는 종목은 뺍니다. `run_graph_backtest`는 그래프에 이 노드가 있으면 표를 읽습니다. 예제 `quality-momentum`이 이렇게 거른 뒤 모멘텀 상위 10을 고릅니다.
 - 일봉과는 **`upload_date` 기준 as-of 조인**으로 붙입니다. `fiscal_date`로 붙이면 공개 전 실적을 미리 보는 미래 참조가 됩니다.
 
 ```python

@@ -11,7 +11,7 @@ from datetime import date, datetime
 
 from ai_studio.n01_frames import MarketBar
 from ai_studio.n02_schema import RUN_CONTEXT, StrategyGraph
-from ai_studio.n03_market_data import History, history_from_bars, load_ohlc, session_date
+from ai_studio.n03_market_data import Fundamentals, History, history_from_bars, load_fundamentals, load_ohlc, session_date
 from ai_studio.n07_runtime import StrategyResult
 from ai_studio.n09_backtest import BacktestResult, Ledger
 from ai_studio.n10_functions import get_function
@@ -68,10 +68,14 @@ def period_ends(days: Sequence[datetime], frequency: str) -> tuple[datetime, ...
     return tuple(sorted(last.values()))
 
 
-def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSettings = RunSettings()) -> BacktestResult:
+def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSettings = RunSettings(),
+                       fundamentals: Fundamentals | None = None) -> BacktestResult:
+    """fundamentals를 주지 않았는데 재무 블록이 있으면 저장된 재무 CSV(load_fundamentals)를 읽는다."""
     check = validate_strategy(graph)
     if not check.ok:
         raise ValueError(check.reason)
+    if fundamentals is None and needs_fundamentals(graph):
+        fundamentals = load_fundamentals()
     execution = next(node for node in graph.nodes if get_function(node.function_id).role == "EXECUTION")
     spec = get_function(execution.function_id)
     params = {param.key: param.default for param in spec.params} | dict(execution.params)
@@ -97,7 +101,7 @@ def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSett
         ledger.mark(day, _closes(history, stamps, held, day))
         if day not in evaluation_days or day == days[-1]:
             continue  # 평가일이 아니거나, 다음 거래일이 없어 체결할 수 없다.
-        outputs = execute(graph, ExecutionContext(day, history, positions=dict(ledger.holdings)))
+        outputs = execute(graph, ExecutionContext(day, history, positions=dict(ledger.holdings), fundamentals=fundamentals))
         result = outputs.port(feed.from_node, feed.from_port)
         if not isinstance(result, StrategyResult):
             raise ValueError("실행 노드에는 전략 판단이 들어와야 합니다.")
@@ -111,6 +115,10 @@ def run_graph_backtest(graph: StrategyGraph, history: History, settings: RunSett
                 next_bars[symbol] = series[index]
         ledger.step(result, prices, next_bars, rebalance_due=day in due, drift_threshold=drift, mark=False)
     return ledger.result()
+
+
+def needs_fundamentals(graph: StrategyGraph) -> bool:
+    return any("fundamental" in get_function(node.function_id).required_data.fields for node in graph.nodes)
 
 
 def _closes(history: History, stamps: Mapping[str, list[datetime]], symbols, day: datetime) -> dict[str, float]:

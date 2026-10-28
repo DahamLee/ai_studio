@@ -23,6 +23,7 @@ from ai_studio.n06_portfolio import (
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 from ai_studio.n08_blocks import (
     allocate_target_weight, combine_conditions, compose_universe, eligible_scores, exclude_universe,
+    fundamental_universe,
     high_indicator, holding_period_exit_events, if_else_condition, if_else_score, min_price_universe,
     moving_average_indicator, price_indicator, return_indicator, rsi_indicator, stop_exit_events,
     volatility_indicator,
@@ -94,6 +95,16 @@ def _min_price(inputs: Inputs, params: Params, context: ExecutionContext) -> dic
     universe = _expect(inputs, "universe", UniverseFrame)
     return {"universe": min_price_universe(context.history, universe.symbols, context.as_of,
                                            min_close=float(params["minClose"]))}  # type: ignore[arg-type]
+
+
+def _fundamental_universe(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
+    universe = _expect(inputs, "universe", UniverseFrame)
+    if context.fundamentals is None:
+        raise ValueError("재무 조건으로 거르기에는 재무 공시 데이터가 필요합니다. data/sp500_fundamentals_sample.csv를 확인하세요.")
+    return {"universe": fundamental_universe(
+        context.fundamentals, universe.symbols, context.as_of,
+        account=str(params["account"]), operator=str(params["operator"]), threshold=float(params["threshold"]),  # type: ignore[arg-type]
+    )}
 
 
 # ── 지표 ──────────────────────────────────────────────────────
@@ -301,6 +312,7 @@ def register_builtin_handlers() -> None:
     pairs: tuple[tuple[str, Handler], ...] = (
         ("universe.compose", _compose),
         ("universe.exclude", _exclude),
+        ("universe.fundamental", _fundamental_universe),
         ("universe.min-price", _min_price),
         ("indicator.return", _indicator(return_indicator, lookback_days=("lookbackDays", int), skip_days=("skipDays", int))),
         ("indicator.moving-average", _indicator(moving_average_indicator, window_days=("windowDays", int))),

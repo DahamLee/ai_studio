@@ -280,6 +280,19 @@ def example_hold_buffer() -> StrategyGraph:
     return StrategyGraph(_universe() + score.nodes + nodes, _UNIVERSE_EDGES + score.edges + edges)
 
 
+def example_quality_momentum() -> StrategyGraph:
+    """ROE 20% 이상, 부채비율 200% 이하인 종목 안에서 모멘텀 상위 10. 재무값은 공시일 기준이다."""
+    quality = (
+        _n("roe", "universe.fundamental", account="ROE", operator="gte", threshold=20),
+        _n("debt", "universe.fundamental", account="DEBT_RATIO", operator="lte", threshold=200),
+    )
+    quality_edges = (_e("filter", "universe", "roe", "universe"), _e("roe", "universe", "debt", "universe"))
+    score = _momentum("mom", ("debt", "universe"))
+    nodes, edges = _factor_strategy(score.out("score"), cash_pct=5)
+    return StrategyGraph(_universe() + quality + score.nodes + nodes,
+                         _UNIVERSE_EDGES + quality_edges + score.edges + edges)
+
+
 def example_trend_filtered_factor() -> StrategyGraph:
     """종가가 50일선 위인 종목 안에서 모멘텀 상위 10."""
     trend = place("trend-filter", "trend", {"universe": _U}, {"ma": {"windowDays": 50}})
@@ -356,6 +369,7 @@ EXAMPLES: dict[str, tuple[str, object]] = {
     "multi-factor": ("모멘텀 + 저변동성 합성 점수", example_multi_factor),
     "hold-buffer": ("상위 N + 보유 유지 버퍼", example_hold_buffer),
     "trend-filtered-factor": ("추세 필터 후 팩터 선정", example_trend_filtered_factor),
+    "quality-momentum": ("ROE·부채비율로 거른 뒤 모멘텀 상위 10", example_quality_momentum),
     "market-regime": ("시장이 이동평균 아래면 현금", example_market_regime),
     "rsi-reversal": ("RSI < 30 진입, 손절·익절·보유기간 청산", example_rsi_reversal),
     "golden-cross": ("골든크로스 / 데드크로스", example_golden_cross),
