@@ -86,7 +86,9 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 
 **선 규칙** (`n13.check_stage_order`, 편집기 `stageOrderProblem`): 선은 앞 단계에서 뒤 단계로만 간다. 주 입력은 같은 단계나 바로 앞 단계에서만 받는다. 보조 입력(`PortSpec.auxiliary`)만 단계를 건너뛴다 — 국면 따라 줄이기의 투자 조건(3→5), 지표로 비중 나누기의 지표(2→5), 최대 보유 수로 비중 정하기의 게이트. 편집기는 보조 입력 선을 점선으로 그린다. 판단 노드는 유니버스를 받지 않고, 앞 단계 데이터(목표 종목·신호 종목)와 현재 보유로 판단 대상을 정한다.
 
-\* 재무 데이터가 없어 실행하면 오류를 낸다.
+\* 재무 공시(`data/sp500_fundamentals_sample.csv`, 예시값)를 업로드일 기준으로 읽는다. PER = 종가 ÷ 최근 4분기 EPS 합, PBR = 종가 ÷ BPS, PSR = 종가 ÷ 최근 4분기 주당매출이고, 나머지 항목은 계정의 최근 공시값이다. 적자로 PER을 정할 수 없거나 공시가 모자라면 값이 없다.
+
+재무로 거르는 자리는 둘이다. 1단계 `universe.fundamental`은 지표를 계산하기 **전에** 모집단을 줄여 순위·백분위가 거른 종목 안에서 매겨진다. 2→3→4단계(`indicator.fundamental` → `condition.threshold` → `selection.top-n`의 대상 조건 또는 `allocation.event-slots`의 게이트)는 순위를 전체 종목으로 낸 뒤 **고를 때만** 거른다. 예제 `quality-momentum`이 앞의 방식, `momentum-quality-pick`이 뒤의 방식이다.
 
 ### 3.2 프리셋 (8개)
 

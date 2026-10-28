@@ -14,7 +14,7 @@ from ai_studio.n01_frames import (
     ConditionFrame, EventFrame, EventPlan, IndicatorFrame, ScoreFrame, SelectionFrame, TargetPortfolio, UniverseFrame,
     WeightFrame,
 )
-from ai_studio.n03_market_data import session_date
+from ai_studio.n03_market_data import Fundamentals, session_date
 from ai_studio.n05_signals import compare_indicators, compare_threshold, negate, transition_events
 from ai_studio.n06_portfolio import (
     apply_cash_weight, cap_max_weight, combine_scores, scale_when_false, score_from_indicator, select_matched,
@@ -23,7 +23,7 @@ from ai_studio.n06_portfolio import (
 from ai_studio.n07_runtime import evaluate_events, evaluate_state
 from ai_studio.n08_blocks import (
     allocate_target_weight, combine_conditions, compose_universe, eligible_scores, exclude_universe,
-    fundamental_universe,
+    fundamental_indicator, fundamental_universe,
     high_indicator, holding_period_exit_events, if_else_condition, if_else_score, min_price_universe,
     moving_average_indicator, price_indicator, return_indicator, rsi_indicator, stop_exit_events,
     volatility_indicator,
@@ -97,12 +97,16 @@ def _min_price(inputs: Inputs, params: Params, context: ExecutionContext) -> dic
                                            min_close=float(params["minClose"]))}  # type: ignore[arg-type]
 
 
+def _fundamentals(context: ExecutionContext, name: str) -> Fundamentals:
+    if context.fundamentals is None:
+        raise ValueError(f"{name}에는 재무 공시 데이터가 필요합니다. 일봉만으로는 계산하지 않습니다.")
+    return context.fundamentals
+
+
 def _fundamental_universe(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
     universe = _expect(inputs, "universe", UniverseFrame)
-    if context.fundamentals is None:
-        raise ValueError("재무 조건으로 거르기에는 재무 공시 데이터가 필요합니다. data/sp500_fundamentals_sample.csv를 확인하세요.")
     return {"universe": fundamental_universe(
-        context.fundamentals, universe.symbols, context.as_of,
+        _fundamentals(context, "재무 조건으로 거르기"), universe.symbols, context.as_of,
         account=str(params["account"]), operator=str(params["operator"]), threshold=float(params["threshold"]),  # type: ignore[arg-type]
     )}
 
@@ -123,7 +127,9 @@ def _indicator(compute: Callable[..., IndicatorFrame], *, scoped: bool = True,
 
 
 def _fundamental(inputs: Inputs, params: Params, context: ExecutionContext) -> dict[str, object]:
-    raise ValueError(f"재무 지표({params['field']})는 공개시점이 있는 재무 데이터가 필요합니다. 일봉만으로는 계산하지 않습니다.")
+    universe = _expect(inputs, "universe", UniverseFrame)
+    return {"value": fundamental_indicator(context.history, _fundamentals(context, "재무 지표 가져오기"),
+                                           universe.symbols, context.as_of, field=str(params["field"]))}
 
 
 # ── 점수·조건·논리 ────────────────────────────────────────────

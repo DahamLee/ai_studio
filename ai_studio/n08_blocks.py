@@ -22,7 +22,7 @@ from ai_studio.n01_frames import (
     WeightFrame,
     WeightRow,
 )
-from ai_studio.n03_market_data import Fundamentals, History, bars_until, filing_as_of, session_date
+from ai_studio.n03_market_data import Fundamentals, History, bars_until, filing_as_of, session_date, trailing_sum
 from ai_studio.n05_signals import OPERATORS
 from ai_studio.n04_indicators import daily_returns, moving_average, rsi, stdev, total_return, window_high
 from ai_studio.n06_portfolio import weight_by_score, weight_equal
@@ -293,6 +293,44 @@ def price_indicator(history: History, symbols: Sequence[str], as_of: datetime, *
     if field not in ("open", "high", "low", "close"):
         raise ValueError(f"지원하지 않는 가격입니다: {field}")
     return _indicator(history, symbols, as_of, scope, 1, lambda s: getattr(s[-1], field))
+
+
+# 가격으로 나누는 재무 지표. (분자 계정, 최근 4분기 합인지). 주당 값이 아닌 계정은 발행주식수로 나눈다.
+_PRICE_MULTIPLES = {
+    "per": ("EPS", True),
+    "pbr": ("BPS", False),
+    "psr": ("REVENUE", True),
+}
+
+
+def fundamental_indicator(history: History, fundamentals: Fundamentals, symbols: Sequence[str], as_of: datetime, *,
+                          field: str) -> IndicatorFrame:
+    """indicator.fundamental. as_of까지 공개된 공시로 값을 낸다.
+    per = 종가 ÷ 최근 4분기 EPS 합, pbr = 종가 ÷ 최근 BPS, psr = 종가 ÷ (최근 4분기 매출 합 ÷ 최근 발행주식수).
+    그 밖의 항목은 계정코드(대문자)의 최근 공시값이다. 공시가 모자라거나 분모가 0 이하(적자 PER 등)면 행을 남기지 않는다."""
+    rows: list[IndicatorRow] = []
+    for symbol in symbols:
+        if field in _PRICE_MULTIPLES:
+            series = _upto(history, symbol, as_of)
+            if not series:
+                continue
+            account, trailing = _PRICE_MULTIPLES[field]
+            if trailing:
+                base = trailing_sum(fundamentals, symbol, account, as_of)
+            else:
+                filing = filing_as_of(fundamentals, symbol, account, as_of)
+                base = filing.value if filing else None
+            if base is not None and account == "REVENUE":
+                shares = filing_as_of(fundamentals, symbol, "SHARES_OUTSTANDING", as_of)
+                base = base / shares.value if shares and shares.value > 0 else None
+            if base is None or base <= 0:
+                continue
+            rows.append(IndicatorRow(symbol, series[-1].close / base))
+        else:
+            filing = filing_as_of(fundamentals, symbol, field.upper(), as_of)
+            if filing is not None:
+                rows.append(IndicatorRow(symbol, filing.value))
+    return IndicatorFrame(tuple(rows))
 
 
 def high_indicator(history: History, symbols: Sequence[str], as_of: datetime, *,

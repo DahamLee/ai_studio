@@ -143,11 +143,13 @@ _INDICATORS: tuple[FunctionSpec, ...] = (
         ("close",), lambda p: int(p["period"]) + 1,
     ),
     _indicator(
-        "indicator.fundamental", "재무 지표 가져오기", "공개시점 기준 재무 항목 값. 재무 데이터가 연결되기 전에는 실행하지 않는다.",
-        (ParamSpec("field", "항목", "enum", "가져올 재무 항목.", "per",
-                   options=_opts(("per", "PER"), ("pbr", "PBR"), ("psr", "PSR"), ("roe", "ROE"),
-                                 ("roa", "ROA"), ("debt_ratio", "부채비율"))),),
-        ("per", "pbr", "psr", "roe", "roa", "debt_ratio", "available_at"), lambda p: 1, scoped=False,
+        "indicator.fundamental", "재무 지표 가져오기",
+        "평가일까지 공시된(업로드일 기준) 재무값. PER·PBR·PSR은 그날 종가로 계산한다. 공시가 모자라거나 적자로 PER을 정할 수 없는 종목은 값이 없다.",
+        (ParamSpec("field", "항목", "enum", "가져올 재무 항목. 비율은 퍼센트 값(ROE 10%는 10)이다.", "per",
+                   options=_opts(("per", "PER (종가 ÷ 최근 4분기 EPS)"), ("pbr", "PBR (종가 ÷ BPS)"),
+                                 ("psr", "PSR (종가 ÷ 최근 4분기 주당매출)"),
+                                 *((code.lower(), f"{label} ({unit})") for code, (label, unit) in FUNDAMENTAL_ACCOUNTS.items()))),),
+        ("close", "fundamental"), lambda p: 1, scoped=False,
     ),
 )
 

@@ -104,11 +104,26 @@ def load_fundamentals(path: Path = FUNDAMENTALS_PATH) -> dict[str, dict[str, tup
     }
 
 
+def filings_until(fundamentals: Fundamentals, symbol: str, account: str, as_of: datetime) -> Sequence[Filing]:
+    """as_of까지 공개된 공시. 공개시각 순이다."""
+    filings = fundamentals.get(symbol, {}).get(account, ())
+    return filings[:bisect_right(filings, as_of, key=lambda item: item.available_at)]
+
+
 def filing_as_of(fundamentals: Fundamentals, symbol: str, account: str, as_of: datetime) -> Filing | None:
     """as_of까지 공개된 가장 최근 공시. 정정 공시가 나중에 올라오면 그때부터 정정값이다."""
-    filings = fundamentals.get(symbol, {}).get(account, ())
-    index = bisect_right(filings, as_of, key=lambda item: item.available_at)
-    return filings[index - 1] if index else None
+    filings = filings_until(fundamentals, symbol, account, as_of)
+    return filings[-1] if filings else None
+
+
+def trailing_sum(fundamentals: Fundamentals, symbol: str, account: str, as_of: datetime, quarters: int = 4) -> float | None:
+    """as_of까지 공개된 최근 quarters개 분기 값의 합(분기 계정의 최근 4분기 합 등).
+    같은 분기가 정정되면 나중 공시를 쓴다. 분기가 모자라면 None."""
+    latest: dict[str, float] = {}
+    for filing in filings_until(fundamentals, symbol, account, as_of):
+        latest[filing.fiscal_period] = filing.value
+    periods = sorted(latest)[-quarters:]  # "2025Q3" 형식이라 문자열 순서가 분기 순서다.
+    return sum(latest[period] for period in periods) if len(periods) == quarters else None
 
 
 def history_from_bars(bars: Iterable[MarketBar]) -> dict[str, tuple[MarketBar, ...]]:

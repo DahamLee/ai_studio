@@ -6,6 +6,7 @@ from ai_studio.n08_blocks import (
     combine_conditions,
     compose_universe,
     exclude_universe,
+    fundamental_indicator,
     fundamental_universe,
     min_price_universe,
     if_else_score,
@@ -58,6 +59,30 @@ class BlockTests(unittest.TestCase):
         self.assertEqual(low.symbols, ("AAA",))
         with self.assertRaisesRegex(ValueError, "비교"):
             fundamental_universe(fundamentals, symbols, at("2025-11-14"), account="ROE", operator="eq", threshold=10)
+
+    def test_fundamental_indicator_prices_against_published_filings(self):
+        history = history_from_bars(bars("AAA", [100, 120]) + bars("LOSS", [50, 50]) + bars("SHORT", [10, 10]))
+        quarter = lambda period, day, value: Filing(at(day), period, value)
+        fundamentals = {
+            "AAA": {
+                # 2025Q4 EPS는 1.0으로 처음 올라왔다가 2026-01-02에 2.0으로 정정된다.
+                "EPS": (quarter("2025Q1", "2025-05-01", 1.0), quarter("2025Q2", "2025-08-01", 1.0),
+                        quarter("2025Q3", "2025-11-01", 1.0), quarter("2025Q4", "2025-12-20", 1.0),
+                        quarter("2025Q4", "2026-01-02", 2.0)),
+                "BPS": (quarter("2025Q4", "2025-12-20", 40.0),),
+                "ROE": (quarter("2025Q4", "2025-12-20", 18.5),),
+            },
+            "LOSS": {"EPS": tuple(quarter(f"2025Q{q}", f"2025-{q * 3:02d}-28", -1.0) for q in (1, 2, 3, 4))},
+            "SHORT": {"EPS": (quarter("2025Q4", "2025-12-20", 1.0),)},
+        }
+        symbols = ("AAA", "LOSS", "SHORT")
+        per = lambda day: {row.instrument_id: row.value for row in fundamental_indicator(history, fundamentals, symbols, at(day), field="per").rows}
+        self.assertEqual(per("2026-01-01"), {"AAA": 100 / 4.0})   # 적자(LOSS)·4분기 미만(SHORT)은 값이 없다
+        self.assertEqual(per("2026-01-02"), {"AAA": 120 / 5.0})   # 정정 공시와 그날 종가
+        pbr = fundamental_indicator(history, fundamentals, symbols, at("2026-01-02"), field="pbr")
+        self.assertEqual([(row.instrument_id, row.value) for row in pbr.rows], [("AAA", 3.0)])
+        roe = fundamental_indicator(history, fundamentals, symbols, at("2026-01-02"), field="roe")
+        self.assertEqual([(row.instrument_id, row.value) for row in roe.rows], [("AAA", 18.5)])
 
     def test_min_price_keeps_closes_at_or_above_the_floor(self):
         history = history_from_bars(
