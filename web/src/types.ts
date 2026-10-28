@@ -100,6 +100,8 @@ export type BacktestReport =
         skipped: number;
       };
       equity: { date: string; value: number }[];
-      trades: { date: string; symbol: string; side: "BUY" | "SELL"; quantity: number; price: number }[];
+      /** 매매 내역 전체. 열 순서는 tradeColumns(노트북·CSV와 같은 TRADE_COLUMNS)다. */
+      tradeColumns: string[];
+      trades: Record<string, string | number | null>[];
       warnings: string[];
     };

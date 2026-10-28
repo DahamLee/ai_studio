@@ -370,7 +370,7 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
 
 _DECISION_AND_EXECUTION: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="strategy.state", name="목표 비중 맞추기", category="strategy", category_label="전략 판단",
+        id="strategy.state", name="목표 비중대로 매매 정하기", category="strategy", category_label="전략 판단",
         summary="목표 포트폴리오를 매 평가 시점의 목표 보유 상태로 바꾼다. 비중은 다시 계산하지 않는다.",
         inputs=(
             PortSpec("portfolio", "목표 포트폴리오", "target_portfolio",
@@ -379,14 +379,14 @@ _DECISION_AND_EXECUTION: tuple[FunctionSpec, ...] = (
         outputs=(_RESULT_OUT,), params=(), role="STRATEGY", strategy_execution_type="STATE_REBALANCE",
     ),
     FunctionSpec(
-        id="strategy.event", name="신호대로 사고팔기", category="strategy", category_label="전략 판단",
+        id="strategy.event", name="신호대로 매매 정하기", category="strategy", category_label="전략 판단",
         summary="진입·청산 계획과 현재 보유를 비교해 한 번의 전이만 발생시킨다. 청산이 진입보다 우선한다.",
         inputs=(PortSpec("plan", "진입·청산 계획", "event_plan", "최대 보유 수로 비중 정하기의 결과.", True),),
         outputs=(_RESULT_OUT,), params=(),
         role="STRATEGY", strategy_execution_type="EVENT_LIFECYCLE",
     ),
     FunctionSpec(
-        id="execution.orders", name="주문 내기", category="execution", category_label="실행",
+        id="execution.orders", name="다음 날 시가에 주문하기", category="execution", category_label="실행",
         summary="전략 판단을 주문 수량으로 바꿔 다음 시가에 체결한다. 언제 다시 맞출지를 여기서만 정한다.",
         inputs=(PortSpec("result", "전략 판단", "strategy_result", "주문으로 바꿀 전략 판단 결과.", True),),
         outputs=(),

@@ -9,12 +9,11 @@ import json
 import sys
 from collections.abc import Mapping
 
-from ai_studio.n03_market_data import history_from_bars, load_ohlc, session_date
+from ai_studio.n03_market_data import History, history_from_bars, load_ohlc, session_date
+from ai_studio.n09_backtest import TRADE_COLUMNS, BacktestResult, trade_rows
 from ai_studio.n12_strategies import graph_from_dict
 from ai_studio.n13_connect import check_editor_graph
 from ai_studio.n15_ohlc_backtest import RunSettings, run_graph_backtest
-
-RECENT_TRADES = 20
 
 
 def backtest(data: Mapping[str, object]) -> dict[str, object]:
@@ -26,7 +25,8 @@ def backtest(data: Mapping[str, object]) -> dict[str, object]:
         return {"ok": False, "reason": check["reason"] or check.get("completeReason")}
     try:
         settings = RunSettings.from_params(data.get("settings") or {})  # type: ignore[arg-type]
-        book = run_graph_backtest(graph_from_dict(graph_data), history_from_bars(load_ohlc()), settings)  # type: ignore[arg-type]
+        history = history_from_bars(load_ohlc())
+        book = run_graph_backtest(graph_from_dict(graph_data), history, settings)  # type: ignore[arg-type]
     except FileNotFoundError:
         return {"ok": False, "reason": "저장된 일봉이 없습니다. scripts/fetch_yahoo_ohlc.py로 먼저 받으세요."}
     except ValueError as error:
@@ -46,12 +46,22 @@ def backtest(data: Mapping[str, object]) -> dict[str, object]:
             "skipped": len(book.skipped_orders),
         },
         "equity": [{"date": session_date(p.as_of).isoformat(), "value": p.total_value} for p in points],
-        "trades": [
-            {"date": session_date(fill.filled_at).isoformat(), "symbol": fill.symbol, "side": fill.side,
-             "quantity": fill.quantity, "price": fill.price}
-            for fill in book.trade_log[-RECENT_TRADES:]
-        ],
+        # 매매 내역 전체. 열은 노트북·CSV(write_trades_csv)와 같은 TRADE_COLUMNS다.
+        "tradeColumns": list(TRADE_COLUMNS),
+        "trades": list(trade_rows(book, initial_cash=settings.initial_capital, ohlc=_fill_day_bars(book, history))),
         "warnings": check["warnings"],
+    }
+
+
+def _fill_day_bars(book: BacktestResult, history: History) -> dict[tuple[str, str], object]:
+    """체결일 봉. 매매 내역의 open·high·low·close 열에 쓴다."""
+    wanted = {(fill.symbol, session_date(fill.filled_at).isoformat()) for fill in book.trade_log}
+    symbols = {symbol for symbol, _ in wanted}
+    return {
+        key: bar
+        for symbol in symbols
+        for bar in history.get(symbol, ())
+        if (key := (symbol, session_date(bar.timestamp).isoformat())) in wanted
     }
 
 

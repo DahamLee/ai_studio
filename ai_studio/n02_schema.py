@@ -35,7 +35,8 @@ STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("judge", "평가하기", ("SCORE", "CONDITION", "LOGIC")),
     ("pick", "매매 대상·시점 정하기", ("SELECTION", "EVENT")),
     ("weight", "비중 정하기", ("WEIGHTING", "CONSTRAINT", "TARGET")),
-    ("decide", "주문하기", ("STRATEGY", "EXECUTION")),
+    ("decide", "매매 결정하기", ("STRATEGY",)),
+    ("execute", "주문하기", ("EXECUTION",)),
 )
 
 

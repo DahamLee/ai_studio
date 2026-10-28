@@ -79,6 +79,7 @@ export function App() {
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [reportFor, setReportFor] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [showTrades, setShowTrades] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const bandRef = useRef(BAND_MIN);
   const dragRef = useRef<{ id: string; dx: number; dy: number; blocked: boolean } | null>(null);
@@ -295,7 +296,7 @@ export function App() {
       body: JSON.stringify({ graph: JSON.parse(graph), settings: runParams }),
     })
       .then((response) => response.json() as Promise<BacktestReport>)
-      .then((result) => { setReport(result); setReportFor(graph); })
+      .then((result) => { setReport(result); setReportFor(graph); setShowTrades(result.ok); })
       .catch(() => { setReport({ ok: false, reason: "백테스트 서버가 없습니다. npm run dev에서만 실행합니다." }); setReportFor(graph); })
       .finally(() => setRunning(false));
   }
@@ -438,7 +439,7 @@ export function App() {
               title={check?.complete ? "저장된 일봉으로 백테스트합니다." : "실행 가능한 그래프여야 합니다."}
               onClick={runBacktest}
             >
-              {running ? "백테스트 중…" : "백테스트 실행"}
+              {running ? "백테스트 중…" : "백테스트 하기"}
             </button>
             <label>
               <span>예제 불러오기</span>
@@ -508,6 +509,7 @@ export function App() {
             })}
           </div>
         </aside>
+        <div className="center">
         <div
           className="board"
           ref={boardRef}
@@ -596,8 +598,25 @@ export function App() {
             </div>
           ) : null}
         </div>
+        {report?.ok && showTrades ? (
+          <TradeTable
+            columns={report.tradeColumns}
+            rows={report.trades}
+            stale={reportFor !== graphJson}
+            onClose={() => setShowTrades(false)}
+          />
+        ) : null}
+        </div>
         <aside className="inspector">
-          {report ? <BacktestPanel report={report} stale={reportFor !== graphJson} onClose={() => setReport(null)} /> : null}
+          {report ? (
+            <BacktestPanel
+              report={report}
+              stale={reportFor !== graphJson}
+              tradesShown={showTrades}
+              onShowTrades={() => setShowTrades(true)}
+              onClose={() => { setReport(null); setShowTrades(false); }}
+            />
+          ) : null}
           {check?.warnings.length ? (
             <section className="warnings">
               <h3>경고</h3>
@@ -710,9 +729,69 @@ function ParamField({ param, value, placeholder, onChange }: {
   );
 }
 
+/** 노트북 DataFrame처럼 보이는 매매 내역 표. 왼쪽 번호는 DataFrame 인덱스다. */
+function TradeTable({ columns, rows, stale, onClose }: {
+  columns: string[];
+  rows: Record<string, string | number | null>[];
+  stale: boolean;
+  onClose: () => void;
+}) {
+  const cell = (column: string, value: string | number | null) => {
+    if (value === null || value === undefined) return "NaN";
+    if (typeof value !== "number") return value;
+    if (column === "quantity") return Number.isInteger(value) ? String(value) : value.toFixed(4);
+    return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  function download() {
+    const quote = (value: unknown) => (value === null || value === undefined ? "" : String(value));
+    const text = [columns.join(","), ...rows.map((row) => columns.map((column) => quote(row[column])).join(","))].join("\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+    link.download = "trades.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+  return (
+    <section className="trades" aria-label="거래 내역">
+      <div className="trades-h">
+        <b>거래 내역</b>
+        <span className="muted">{rows.length} rows × {columns.length} columns{stale ? " · 그래프가 바뀌었습니다. 다시 백테스트하면 갱신됩니다." : ""}</span>
+        <button type="button" className="tool" onClick={download}>CSV 내려받기</button>
+        <button type="button" className="tool" aria-label="거래 내역 닫기" onClick={onClose}>닫기</button>
+      </div>
+      <div className="trades-b">
+        <table className="df">
+          <thead>
+            <tr><th />{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={index}>
+                <th>{index}</th>
+                {columns.map((column) => (
+                  <td key={column} className={typeof row[column] === "number" ? "num" : row[column] === "BUY" ? "buy" : row[column] === "SELL" ? "sell" : undefined}>
+                    {cell(column, row[column])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {rows.length === 0 ? <p className="muted">체결이 없습니다.</p> : null}
+      </div>
+    </section>
+  );
+}
+
 const percent = (value: number) => `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
 
-function BacktestPanel({ report, stale, onClose }: { report: BacktestReport; stale: boolean; onClose: () => void }) {
+function BacktestPanel({ report, stale, tradesShown, onShowTrades, onClose }: {
+  report: BacktestReport;
+  stale: boolean;
+  tradesShown: boolean;
+  onShowTrades: () => void;
+  onClose: () => void;
+}) {
   if (!report.ok) {
     return (
       <section className="result bad">
@@ -749,22 +828,8 @@ function BacktestPanel({ report, stale, onClose }: { report: BacktestReport; sta
       <svg className="equity" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="평가액 추이">
         <path d={line} />
       </svg>
-      {trades.length ? (
-        <details>
-          <summary>최근 체결 {trades.length}건</summary>
-          <table>
-            <tbody>
-              {[...trades].reverse().map((trade, index) => (
-                <tr key={index}>
-                  <td>{trade.date.slice(5)}</td>
-                  <td>{trade.symbol}</td>
-                  <td className={trade.side === "BUY" ? "up" : "down"}>{trade.side === "BUY" ? "매수" : "매도"}</td>
-                  <td>{trade.quantity}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
+      {trades.length && !tradesShown ? (
+        <button type="button" className="tool" onClick={onShowTrades}>거래 내역 {trades.length}건 보기</button>
       ) : null}
     </section>
   );

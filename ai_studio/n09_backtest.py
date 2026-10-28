@@ -208,7 +208,7 @@ def run_backtest(
 TRADE_COLUMNS = (
     "signal_date", "filled_date", "symbol", "side", "quantity",
     "open", "high", "low", "close", "fill_price",
-    "buy_amount", "sell_amount", "fee", "slippage", "cash_after",
+    "buy_amount", "sell_amount", "fee", "slippage", "realized_pnl", "cash_after",
 )
 
 
@@ -245,6 +245,7 @@ def trade_rows(
             "sell_amount": sell_amount,
             "fee": fill.fee,
             "slippage": fill.slippage,
+            "realized_pnl": fill.realized_pnl,
             "cash_after": cash,
         })
     return tuple(rows)

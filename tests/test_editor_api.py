@@ -13,7 +13,7 @@ class BacktestApiTests(unittest.TestCase):
         graph["edges"] = [edge for edge in graph["edges"] if edge["to"] != "orders"]
         report = backtest({"graph": graph, "settings": {}})
         self.assertFalse(report["ok"])
-        self.assertIn("주문 내기", str(report["reason"]))
+        self.assertIn("다음 날 시가에 주문하기", str(report["reason"]))
 
     @unittest.skipUnless(DATA.exists(), "저장된 일봉이 없다")
     def test_summary_matches_ledger(self) -> None:
@@ -26,6 +26,10 @@ class BacktestApiTests(unittest.TestCase):
         self.assertAlmostEqual(summary["finalValue"], report["equity"][-1]["value"])
         self.assertAlmostEqual(summary["cumulativeReturn"], summary["finalValue"] / 100_000 - 1)
         self.assertLessEqual(summary["maxDrawdown"], 0)
+        # 매매 내역은 전체가 노트북·CSV와 같은 열로 온다.
+        self.assertEqual(len(report["trades"]), summary["trades"])
+        self.assertEqual(list(report["trades"][0]), report["tradeColumns"])
+        self.assertIsNotNone(report["trades"][0]["open"])
 
     @unittest.skipUnless(DATA.exists(), "저장된 일봉이 없다")
     def test_empty_period_is_reported(self) -> None:
