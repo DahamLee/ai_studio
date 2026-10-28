@@ -79,8 +79,8 @@ BacktestResult(signal_history, trade_log, position_history, portfolio_history, s
 | 5 비중 정하기 | WEIGHTING | `allocation.target-weight` 비중 나누기, `allocation.indicator-weight` 지표로 비중 나누기, `allocation.event-slots` 최대 보유 수로 비중 정하기(진입·청산 신호, 게이트, 최대 보유 수 → `event_plan`) |
 | | CONSTRAINT | `portfolio.max-weight` 비중 상한 두기, `portfolio.cash` 현금 남기기, `portfolio.risk-off` 국면 따라 줄이기 |
 | | TARGET | `portfolio.target` 목표 포트폴리오 만들기 |
-| 6 매매 결정하기 | STRATEGY | `strategy.state` 목표 비중대로 매매 정하기(← 목표 포트폴리오), `strategy.event` 신호대로 매매 정하기(← 진입·청산 계획) |
-| 7 주문하기 | EXECUTION | `execution.orders` 다음 날 시가에 주문하기(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
+| 6 매매 결정하기 | STRATEGY | `strategy.state` 목표 비중과 보유 비교하기(← 목표 포트폴리오), `strategy.event` 신호와 보유 비교하기(← 진입·청산 계획) |
+| 7 주문하기 | EXECUTION | `execution.orders` 주기·체결 방식 정하기(리밸런스 주기, 이탈 허용, 소수 주문, 현금 부족 처리) |
 
 4단계(매매 대상·시점)와 6단계(매매 결정)의 차이: 4단계는 보유·현금을 모른 채 전체 종목에 대해 "지금이 그 시점이다"만 알린다. 6단계는 현재 보유와 남은 자리를 보고 실제로 살 것·팔 것·둘 것을 정한다. 7단계는 그 결정을 주식 수로 바꿔 다음 거래일 시가에 체결한다. 4단계를 대상·시점 두 단계로 나누지 않는 이유는 둘이 서로 다른 갈래(팩터·시그널)의 같은 순서이기 때문이다. 나누면 팩터 갈래(선정 → 비중)와 시그널 갈래(조건 → 시점) 모두 빈 띠를 건너뛰게 된다.
 
