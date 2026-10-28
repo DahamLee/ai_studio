@@ -8,7 +8,7 @@
 from collections.abc import Callable, Mapping
 
 from ai_studio.n02_schema import (
-    PORT_TYPE_LABEL, RUN_CONTEXT, STAGES, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData, stage_of,
+    LANES, PORT_TYPE_LABEL, RUN_CONTEXT, STAGES, FunctionSpec, ParamOption, ParamSpec, PortSpec, RequiredData, stage_of,
 )
 
 
@@ -258,7 +258,7 @@ _SELECTION_AND_EVENTS: tuple[FunctionSpec, ...] = (
     ),
     FunctionSpec(
         id="event.transition", name="진입·청산 시점 잡기", category="event", category_label="이벤트",
-        summary="조건이 전 거래일 거짓에서 오늘 참이 되면 진입, 참에서 거짓이 되면 청산 신호를 낸다. 보유·현금은 보지 않고 시점만 알린다. 실제로 살지 팔지는 주문하기 단계가 정한다.",
+        summary="조건이 전 거래일 거짓에서 오늘 참이 되면 진입, 참에서 거짓이 되면 청산 신호를 낸다. 보유·현금은 보지 않고 시점만 알린다. 실제로 살지 팔지는 매매 결정하기 단계가 정한다.",
         inputs=(_CONDITION_IN,),
         outputs=(
             PortSpec("entry", "진입", "event", "거짓 → 참이 된 시점.", True),
@@ -370,7 +370,7 @@ _PORTFOLIO: tuple[FunctionSpec, ...] = (
 
 _DECISION_AND_EXECUTION: tuple[FunctionSpec, ...] = (
     FunctionSpec(
-        id="strategy.state", name="목표 비중과 보유 비교하기", category="strategy", category_label="전략 판단",
+        id="strategy.state", name="리밸런싱 하기", category="strategy", category_label="전략 판단",
         summary="목표 포트폴리오를 매 평가 시점의 목표 보유 상태로 바꾼다. 비중은 다시 계산하지 않는다.",
         inputs=(
             PortSpec("portfolio", "목표 포트폴리오", "target_portfolio",
@@ -487,7 +487,13 @@ def function_catalog() -> dict[str, object]:
             },
         })
     return {
-        "stages": [{"id": stage, "label": label, "roles": list(roles)} for stage, label, roles in STAGES],
+        "stages": [
+            {
+                "id": stage, "label": label, "roles": list(roles),
+                "lanes": [{"label": lane, "roles": list(lane_roles)} for lane, lane_roles in LANES.get(stage, ())],
+            }
+            for stage, label, roles in STAGES
+        ],
         "functions": functions,
         "presets": preset_catalog(),
         "examples": example_catalog(),

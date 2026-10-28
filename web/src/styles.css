@@ -12,6 +12,7 @@ button { cursor: pointer; }
 
 .studio { height: 100vh; display: flex; flex-direction: column; }
 .top {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 1.5rem;
@@ -43,6 +44,13 @@ h1 { margin: 0; font-size: 1.125rem; }
 .warnings { padding: 0.5rem 0.625rem; border-radius: 0.5rem; background: #fffaeb; }
 .warnings li { color: #b54708; }
 .wall-note {
+  /* 머리글 아래에 떠 있게 해서, 나타나도 캔버스가 밀리지 않는다(드래그 중 위치가 튀지 않게). */
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 1rem;
+  z-index: 20;
+  max-width: 36rem;
+  box-shadow: 0 4px 12px rgba(20, 33, 61, 0.12);
   padding: 0.4rem 0.7rem;
   border-radius: 0.5rem;
   background: #fff6f5;
@@ -120,6 +128,12 @@ h1 { margin: 0; font-size: 1.125rem; }
 .band.alt { background: rgba(8, 117, 209, 0.04); }
 .band-h { display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.75rem; color: #3d4750; }
 .band-h b { font-size: 0.8125rem; }
+.band-h b.off { color: #a3acb6; font-weight: 500; }
+.lane-pair { display: inline-flex; align-items: center; gap: 0.4rem; }
+.lane-pair i { color: #a3acb6; font-style: normal; }
+.lane-line { position: absolute; top: 6px; bottom: 6px; border-left: 1px dashed #b9c4cf; }
+.lane-h { position: absolute; top: 0; padding-left: 0.6rem; }
+.lib-lane { margin: 0.375rem 0 0.125rem; padding: 0 0.375rem 0 1.9rem; color: #6b7682; font-size: 0.6875rem; font-weight: 700; }
 .edges { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .edges path { fill: none; stroke: #8fb8e3; stroke-width: 1.75; pointer-events: stroke; cursor: pointer; }
 .edges path:hover { stroke: #b42318; stroke-width: 3; }

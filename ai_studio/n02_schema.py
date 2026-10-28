@@ -33,11 +33,17 @@ STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("universe", "종목 고르기", ("UNIVERSE",)),
     ("indicator", "지표 계산하기", ("INDICATOR",)),
     ("judge", "평가하기", ("SCORE", "CONDITION", "LOGIC")),
-    ("pick", "매매 대상·시점 정하기", ("SELECTION", "EVENT")),
+    ("pick", "매매 대상 정하기 | 매매 신호 잡기", ("SELECTION", "EVENT")),
     ("weight", "비중 정하기", ("WEIGHTING", "CONSTRAINT", "TARGET")),
     ("decide", "매매 결정하기", ("STRATEGY",)),
     ("execute", "주문하기", ("EXECUTION",)),
 )
+
+
+# 한 단계 안의 칸. 4단계는 상태형 갈래(대상)와 이벤트형 갈래(신호)가 왼쪽·오른쪽 칸에 나란히 놓인다.
+LANES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "pick": (("매매 대상 정하기", ("SELECTION",)), ("매매 신호 잡기", ("EVENT",))),
+}
 
 
 def stage_of(role: str) -> str:

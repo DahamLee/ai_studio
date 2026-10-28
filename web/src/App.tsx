@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { acceptedTypes, layoutColumns, resolveOutputType, stageIndex, stageOrderProblem } from "./layers";
+import { acceptedTypes, laneIndex, layoutColumns, resolveOutputType, stageIndex, stageOrderProblem } from "./layers";
 import type { BacktestReport, BlockFunction, Catalog, GraphCheck, GraphEdge, Param, ParamValue, Port, Preset, Stage } from "./types";
 
 type CanvasNode = {
@@ -82,7 +82,7 @@ export function App() {
   const [showTrades, setShowTrades] = useState(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const bandRef = useRef(BAND_MIN);
-  const dragRef = useRef<{ id: string; dx: number; dy: number; blocked: boolean } | null>(null);
+  const dragRef = useRef<{ id: string; dx: number; dy: number; blocked: boolean; laneBlocked: boolean } | null>(null);
 
   const stages: Stage[] = catalog?.stages ?? [];
   const byId = useMemo(() => new Map((catalog?.functions ?? []).map((fn) => [fn.id, fn])), [catalog]);
@@ -91,6 +91,36 @@ export function App() {
     return node ? byId.get(node.functionId) : undefined;
   };
   const indexOf = (functionId: string) => stageIndex(stages, byId.get(functionId));
+  const laneOf = (functionId: string) => laneIndex(stages, byId.get(functionId));
+  /** 블록이 놓이는 자리 이름. 칸이 나뉜 띠면 칸 이름이다. */
+  const placeLabel = (functionId: string) => {
+    const stage = stages[indexOf(functionId)];
+    return stage?.lanes.length ? stage.lanes[laneOf(functionId)]?.label : stage?.label;
+  };
+
+  /** 칸이 나뉜 띠에서 노드가 옆 칸으로 넘어가지 않는 x 범위. 칸이 없거나 옆 칸이 비어 있으면 제한이 없다. */
+  function laneRange(node: CanvasNode, list: CanvasNode[]) {
+    const band = indexOf(node.functionId);
+    const lane = laneOf(node.functionId);
+    const others = list.filter((item) => item.instanceId !== node.instanceId && indexOf(item.functionId) === band);
+    const left = others.filter((item) => laneOf(item.functionId) < lane).map((item) => item.x + NODE_W + COL_GAP);
+    const right = others.filter((item) => laneOf(item.functionId) > lane).map((item) => item.x - NODE_W - COL_GAP);
+    return { min: Math.max(X0, ...left), max: right.length ? Math.min(...right) : Infinity };
+  }
+
+  /** 새 노드가 옆 칸을 침범하면 새 노드를 칸 안으로 옮기고, 그래도 겹치면 오른쪽 칸 노드를 민다. */
+  function fitLane(node: CanvasNode, list: CanvasNode[]) {
+    const { min, max } = laneRange(node, list);
+    const placed = { ...node, x: Math.max(node.x, min) };
+    if (placed.x <= max) return { node: placed, list };
+    const band = indexOf(node.functionId);
+    const lane = laneOf(node.functionId);
+    const shift = placed.x - max;
+    return {
+      node: placed,
+      list: list.map((item) => (indexOf(item.functionId) === band && laneOf(item.functionId) > lane ? { ...item, x: item.x + shift } : item)),
+    };
+  }
 
   useEffect(() => {
     const board = boardRef.current;
@@ -215,7 +245,8 @@ export function App() {
   /** 띠마다 한 줄, 모든 선이 왼쪽에서 오른쪽으로 가도록 다시 놓는다. */
   function arrange(list: CanvasNode[], edgeList: GraphEdge[]) {
     const band = new Map(list.map((node) => [node.instanceId, indexOf(node.functionId)]));
-    const columns = layoutColumns(list.map((node) => node.instanceId), (id) => band.get(id) ?? 0, edgeList);
+    const lane = new Map(list.map((node) => [node.instanceId, laneOf(node.functionId)]));
+    const columns = layoutColumns(list.map((node) => node.instanceId), (id) => band.get(id) ?? 0, edgeList, (id) => lane.get(id) ?? 0);
     return list.map((node) => ({
       ...node,
       x: X0 + (columns.get(node.instanceId) ?? 0) * (NODE_W + COL_GAP),
@@ -237,7 +268,9 @@ export function App() {
       const free = above && !nodes.some((item) => indexOf(item.functionId) === band && Math.abs(item.x - above.x) < NODE_W);
       if (above && free) node = { ...node, x: above.x };
     }
-    setNodes([...nodes, node]);
+    const fitted = fitLane(node, nodes);
+    node = fitted.node;
+    setNodes([...fitted.list, node]);
     setEdges((current) => [...current, ...suggested]);
     setSelectedId(node.instanceId);
   }
@@ -373,6 +406,7 @@ export function App() {
       dx: event.clientX - rect.left + board.scrollLeft - node.x,
       dy: event.clientY - rect.top + board.scrollTop - node.y,
       blocked: false,
+      laneBlocked: false,
     };
     setSelectedId(node.instanceId);
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -383,17 +417,33 @@ export function App() {
     const board = boardRef.current;
     if (!drag || !board) return;
     const rect = board.getBoundingClientRect();
-    const x = Math.max(X0, event.clientX - rect.left + board.scrollLeft - drag.dx);
+    const rawX = Math.max(X0, event.clientX - rect.left + board.scrollLeft - drag.dx);
     const rawY = event.clientY - rect.top + board.scrollTop - drag.dy;
     const dragging = nodes.find((node) => node.instanceId === drag.id);
+    const range = dragging ? laneRange(dragging, nodes) : { min: X0, max: Infinity };
+    const x = Math.min(Math.max(rawX, range.min), Math.max(range.min, range.max));
     const index = dragging ? indexOf(dragging.functionId) : 0;
     const y = dragging ? clampY(index, rawY, bandRef.current) : rawY;
-    if (dragging && y !== rawY && !drag.blocked) {
+    if (dragging && Math.abs(y - rawY) > 1 && !drag.blocked) {
       drag.blocked = true;
       const name = byId.get(dragging.functionId)?.name ?? "이";
       setWall(`${name} 블록은 ${stages[index]?.label} 단계 안에서만 옮길 수 있습니다.`);
     }
+    if (dragging && x !== rawX && !drag.laneBlocked) {
+      drag.laneBlocked = true;
+      setWall(`${byId.get(dragging.functionId)?.name ?? "이"} 블록은 ${placeLabel(dragging.functionId)} 칸 안에서만 옮길 수 있습니다.`);
+    }
     setNodes((current) => current.map((node) => (node.instanceId === drag.id ? { ...node, x, y } : node)));
+  }
+
+  /** 칸이 나뉜 띠의 구분선 위치. 두 칸 모두 노드가 있을 때만 긋는다. used는 노드가 있는 칸 번호. */
+  function laneSplit(index: number): { x: number | null; used: Set<number> } {
+    const inBand = nodes.filter((node) => indexOf(node.functionId) === index);
+    const used = new Set(inBand.map((node) => laneOf(node.functionId)));
+    if (!stages[index]?.lanes.length || used.size < 2) return { x: null, used };
+    const leftEnd = Math.max(...inBand.filter((node) => laneOf(node.functionId) === 0).map((node) => node.x + NODE_W));
+    const rightStart = Math.min(...inBand.filter((node) => laneOf(node.functionId) > 0).map((node) => node.x));
+    return { x: (leftEnd + rightStart) / 2, used };
   }
 
   const status = checkError
@@ -482,7 +532,12 @@ export function App() {
                     <b>{stage.label}</b>
                     <small>{used ? `${used}개 사용` : ""}</small>
                   </div>
-                  {items.map((fn) => {
+                  {(stage.lanes.length
+                    ? stage.lanes.map((lane) => ({ lane: lane.label, list: items.filter((fn) => lane.roles.includes(fn.role)) }))
+                    : [{ lane: null, list: items }]
+                  ).filter((group) => group.list.length).map((group) => [
+                    group.lane ? <p key={group.lane} className="lib-lane">{group.lane}</p> : null,
+                    ...group.list.map((fn) => {
                     const count = nodes.filter((node) => node.functionId === fn.id).length;
                     return (
                       <div
@@ -503,7 +558,8 @@ export function App() {
                         </button>
                       </div>
                     );
-                  })}
+                  }),
+                  ])}
                 </section>
               );
             })}
@@ -519,19 +575,33 @@ export function App() {
         >
           {catalog ? (
             <div className="board-in" style={{ width: boardWidth, height: boardHeight }}>
-              {stages.map((stage, index) => (
-                <div
-                  key={stage.id}
-                  className={index % 2 ? "band alt" : "band"}
-                  data-stage={stage.id}
-                  style={{ top: index * bandH, height: bandH }}
-                >
-                  <div className="band-h">
-                    <span className="stepn">{index + 1}</span>
-                    <b>{stage.label}</b>
+              {stages.map((stage, index) => {
+                const split = laneSplit(index);
+                return (
+                  <div
+                    key={stage.id}
+                    className={index % 2 ? "band alt" : "band"}
+                    data-stage={stage.id}
+                    style={{ top: index * bandH, height: bandH }}
+                  >
+                    <div className="band-h">
+                      <span className="stepn">{index + 1}</span>
+                      {stage.lanes.length && split.x == null ? stage.lanes.map((lane, at) => (
+                        <span key={lane.label} className="lane-pair">
+                          {at ? <i>|</i> : null}
+                          <b className={split.used.has(at) ? undefined : "off"}>{lane.label}</b>
+                        </span>
+                      )) : <b>{stage.lanes.length ? stage.lanes[0].label : stage.label}</b>}
+                    </div>
+                    {split.x != null ? (
+                      <>
+                        <div className="lane-line" style={{ left: split.x }} />
+                        <div className="band-h lane-h" style={{ left: split.x }}><b>{stage.lanes[1]?.label}</b></div>
+                      </>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
               <svg className="edges" width={boardWidth} height={boardHeight}>
                 <defs>
                   <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -627,7 +697,7 @@ export function App() {
             <>
               <p className="eyebrow">캔버스에 놓인 인스턴스</p>
               <h2>{selectedFn.name}</h2>
-              <p className="muted">{stages[indexOf(selected.functionId)]?.label} 단계 · {selectedFn.role}</p>
+              <p className="muted">{indexOf(selected.functionId) + 1}단계 {placeLabel(selected.functionId)} · {selectedFn.role}</p>
               <p>{selectedFn.summary}</p>
               {selectedFn.minimumHistory > 1 ? <p className="muted">기본값으로 종목마다 최소 {selectedFn.minimumHistory}개 봉이 필요합니다.</p> : null}
               {selectedFn.params.length ? (

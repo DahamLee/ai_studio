@@ -51,7 +51,8 @@ export type BlockFunction = {
   };
 };
 
-export type Stage = { id: string; label: string; roles: string[] };
+export type Lane = { label: string; roles: string[] };
+export type Stage = { id: string; label: string; roles: string[]; lanes: Lane[] };
 
 export type GraphNode = { id: string; function_id: string; params: Record<string, ParamValue> };
 export type GraphEdge = { from: string; fromPort: string; to: string; toPort: string };
